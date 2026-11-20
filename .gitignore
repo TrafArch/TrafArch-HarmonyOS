@@ -10,3 +10,5 @@
 /.clang-tidy
 **/.test
 /.appanalyzer
+/Trafarch.csr
+/TrafArch.p12
