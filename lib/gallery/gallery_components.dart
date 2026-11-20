@@ -92,7 +92,7 @@ extension _GalleryComponents on _GalleryViewState {
       _ => '足迹',
     };
     final extra = switch (page) {
-      GalleryPage.home => _icon(
+      GalleryPage.home when !c.isLive => _icon(
         Icons.qr_code_scanner_rounded,
         '扫码',
         () => c.navigate(GalleryPage.qr),
@@ -100,7 +100,7 @@ extension _GalleryComponents on _GalleryViewState {
         grouped: true,
         color: t.text,
       ),
-      GalleryPage.expert => _icon(
+      GalleryPage.expert when !c.isLive => _icon(
         Icons.download_outlined,
         '导出卡片记录',
         () => c.export(),
@@ -660,7 +660,8 @@ extension _GalleryComponents on _GalleryViewState {
   GalleryBalancePresentation _balancePresentation(GalleryCard card) =>
       GalleryBalancePresentation.parse(
         card.balance(c.includeOverdraft),
-        currencyCode: card.currency?.name.toUpperCase(),
+        currencyCode:
+            card.liveCurrencyCode ?? card.currency?.name.toUpperCase(),
       );
 
   Size _measureText(String value, TextStyle style) {

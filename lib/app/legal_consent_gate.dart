@@ -16,11 +16,13 @@ class LegalConsentGate extends StatefulWidget {
     required this.child,
     this.settingsStore,
     this.screenBuilder,
+    this.enableAnalytics = true,
   });
 
   final Widget child;
   final SettingsStore? settingsStore;
   final Widget Function(LegalConsentPrompt?)? screenBuilder;
+  final bool enableAnalytics;
 
   @override
   State<LegalConsentGate> createState() => _LegalConsentGateState();
@@ -46,7 +48,8 @@ class _LegalConsentGateState extends State<LegalConsentGate> {
 
   Future<void> _load() async {
     try {
-      _analyticsAvailable = await FirebaseCollection.available();
+      _analyticsAvailable =
+          widget.enableAnalytics && await FirebaseCollection.available();
       _analyticsEnabled = _analyticsAvailable;
       final receipt = await _store.read(SettingsKeys.legalConsent);
       final hasChoice =

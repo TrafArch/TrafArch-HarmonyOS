@@ -1,5 +1,7 @@
 # Android native session and channel contract
 
+This document records the upstream Android implementation and the wire contract reused on HarmonyOS. Android is not a build target of this repository. See [the HarmonyOS host documentation](HARMONY_FLUTTER.md) for current platform support.
+
 Task 5, approved refactor dated 2026-10-20; integration keys confirmed with the parent on 2026-10-21.
 The install package identity is applicationId `com.kajolno.TrafArch`, which is also the Kotlin
 namespace. The NFC wire interface, permissions, Dart protocol, APDU construction,

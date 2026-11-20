@@ -1,8 +1,12 @@
 # TrafArch 架构与代码所有权
 
+## 鸿蒙默认入口
+
+`lib/main.dart` → `HarmonyApp` → `GalleryApp`；同意协议后，`HarmonyGalleryController` 使用原版 `AppDependencies` 连接读卡、参考库与档案，不加载样例。仓库根目录下的 `entry/` 是唯一原生宿主，见[鸿蒙构建及已接入能力](HARMONY_FLUTTER.md)。下文的 Android 行为保留为原版迁移参考，不是本仓库提供的构建目标。
+
 ## 2.x 内部界面预览
 
-`lib/main_gallery.dart` 启动 `InternalPreviewApp`，默认使用现有界面；内部宿主通过 `BetaUiScope` 向设置页提供“启用新界面（beta）”开关。开关仅保留在当前进程，重启恢复关闭。离开任一界面会释放该界面的状态；内部构建关闭自动更新检查，正式入口行为不变。
+`lib/main_gallery.dart` 是独立的 2.x 样例预览入口，不切换到旧界面。旧的 `InternalPreviewApp` 与 `BetaUiScope` 保留供原版界面回归测试，不由发布入口加载。
 
 新版前端从零构建于 `lib/gallery/`，不复用旧页面、旧主题或旧导航。`GalleryApp` → `GalleryController` / `GalleryQrController` → 合成 fixtures，页面消费展示状态与回调，不创建 `AppDependencies` 或访问真实档案、NFC、相机、相册与文件导出通道。现有界面继续使用原业务层，新版模拟数据不会写入或覆盖真实档案。
 
@@ -23,10 +27,6 @@ Gallery 预测性返回使用 Flutter 公开的手势生命周期与自定义 Pa
 Gallery 周统计在独立展示模型中按固定演示周汇总，使用样例的明确币种及最小货币单位；只统计有明确日期的对应币种扣款。人民币／港币保留两位小数，日元使用整数；未知币种保留不可用，不从真实卡号、地区或当前时间推断。
 
 卡包列表与共用大卡面通过纯展示帮助模型 `GalleryBalancePresentation` 分离币种与数字，输入现有余额文本和明确币种代码，统一显示 CNY ¥、JP￥、HK$、USD $、MOP ¥。裸 ¥／$ 不补猜币种；原余额字段、交易明细、导出与周统计接口不受展示格式影响。
-
-Android Gradle 根据 Dart target 的文件名识别 2.x Gallery 构建。Gallery 默认应用 Google Services 插件并包含 Firebase Analytics 依赖；需要完全离线的预览包时可通过 Gradle 属性 `galleryAnalytics=false` 显式关闭。包名、显示名称、原签名和每次打包预留下一构建号的流程保持统一。详见 [GALLERY.md](GALLERY.md)。
-
-Android 版本码直接使用 pubspec 的构建号，`force-version-code-ignoring-abi=true` 固定关闭 Flutter 拆分 APK 的 ABI 偏移；Gradle 拒绝用 false 覆盖，避免 AppInfo、更新比较与安装版本码分离。旧界面和 2.x 关于页统一显示同一个 `AppInfo.buildNumber`，不再对历史 4xxx 产物额外加减 2000。打包前同步 AppInfo、成功打包后预留下一号的机制继续沿用；测试和配置检查不消耗号码。可通过 `dev/gallery/verify_version_codes.gradle` 只读核对 Debug／Profile／Release 各输出的配置版本码，最终交付仍须以 APK/AAB 清单为准。
 
 ## 八达通本地余额读取
 

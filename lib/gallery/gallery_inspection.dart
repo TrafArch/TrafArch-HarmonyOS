@@ -1,76 +1,90 @@
 part of 'gallery_app.dart';
 
 extension _GalleryInspection on _GalleryViewState {
-  Widget _expert() => _list([
-    _tabs(
-      (c.data.json['expertTabs'] as List).cast<String>(),
-      c.expertTab,
-      (i) => c.update(() => c.expertTab = i),
-      scroll: true,
-      id: 'expert-tabs',
-    ),
-    _gap(16),
-    _fade(
-      'expert-${c.hasRead}-${c.expertTab}-${c.expertKind}',
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (!c.hasRead)
-            _empty(
-              '尚未读取卡片',
-              '请先在首页读取卡片，再查看技术字段与解析信息',
-              icon: Icons.science_outlined,
-              action: _button(
-                '前往首页',
-                () => c.navigate(GalleryPage.home),
-                primary: true,
-              ),
-            )
+  Widget _expert() => c.isLive
+      ? _list([
+          if (c.readMetadata.isEmpty)
+            _empty('尚未读取卡片', '请先在首页贴卡，再查看本次读取的技术字段')
           else
-            ...switch (c.expertTab) {
-              0 => [
-                ..._expertSections(c.expertKind),
-                _text(
-                  '以上为内置样例，未保留的字段显示未知。',
-                  role: GalleryTypography.caption,
-                  color: t.muted,
-                ),
+            _panel(
+              Column(
+                children: [
+                  for (final entry in c.readMetadata.entries)
+                    _kv(entry.key, entry.value),
+                ],
+              ),
+            ),
+        ], id: 'expert')
+      : _list([
+          _tabs(
+            (c.data.json['expertTabs'] as List).cast<String>(),
+            c.expertTab,
+            (i) => c.update(() => c.expertTab = i),
+            scroll: true,
+            id: 'expert-tabs',
+          ),
+          _gap(16),
+          _fade(
+            'expert-${c.hasRead}-${c.expertTab}-${c.expertKind}',
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (!c.hasRead)
+                  _empty(
+                    '尚未读取卡片',
+                    '请先在首页读取卡片，再查看技术字段与解析信息',
+                    icon: Icons.science_outlined,
+                    action: _button(
+                      '前往首页',
+                      () => c.navigate(GalleryPage.home),
+                      primary: true,
+                    ),
+                  )
+                else
+                  ...switch (c.expertTab) {
+                    0 => [
+                      ..._expertSections(c.expertKind),
+                      _text(
+                        '以上为内置样例，未保留的字段显示未知。',
+                        role: GalleryTypography.caption,
+                        color: t.muted,
+                      ),
+                    ],
+                    1 => [..._expertSections('transit')],
+                    2 => [_compliance()],
+                    _ => [
+                      _text(
+                        '保留的示例帧按原顺序完整展示。SELECT、GET BALANCE 和 0x1A 原始响应未保留。',
+                        role: GalleryTypography.caption,
+                        color: t.muted,
+                      ),
+                      ...['sfi18', 'sfi1e'].indexed.expand(
+                        (item) => [
+                          _sectionTitle(
+                            '${item.$1 + 1} 读取${item.$1 == 0 ? '交易明细 SFI 0x18' : '过程循环 SFI 0x1E'}',
+                          ),
+                          _hexBox(
+                            'C-APDU  ${item.$1 == 0 ? '00 B2 01 C4 00' : '00 B2 01 F4 00'}\nR-APDU  ${_spacedHex('${(c.data.raw['shanghai'] as Map)[item.$2]}9000')}',
+                          ),
+                        ],
+                      ),
+                      _gap(14),
+                      _expand('expert:raw-process', '过程记录原始数据 0x1A / 0x1E', [
+                        _kv('0x1A 城市轨道 / 公交', '未保留'),
+                        _kv('0x1E 循环记录 1', '42 字节'),
+                        _gap(10),
+                        _hexBox(
+                          _spacedHex(
+                            (c.data.raw['shanghai'] as Map)['sfi1e'] as String,
+                          ),
+                        ),
+                      ], initiallyOpen: true),
+                    ],
+                  },
               ],
-              1 => [..._expertSections('transit')],
-              2 => [_compliance()],
-              _ => [
-                _text(
-                  '保留的示例帧按原顺序完整展示。SELECT、GET BALANCE 和 0x1A 原始响应未保留。',
-                  role: GalleryTypography.caption,
-                  color: t.muted,
-                ),
-                ...['sfi18', 'sfi1e'].indexed.expand(
-                  (item) => [
-                    _sectionTitle(
-                      '${item.$1 + 1} 读取${item.$1 == 0 ? '交易明细 SFI 0x18' : '过程循环 SFI 0x1E'}',
-                    ),
-                    _hexBox(
-                      'C-APDU  ${item.$1 == 0 ? '00 B2 01 C4 00' : '00 B2 01 F4 00'}\nR-APDU  ${_spacedHex('${(c.data.raw['shanghai'] as Map)[item.$2]}9000')}',
-                    ),
-                  ],
-                ),
-                _gap(14),
-                _expand('expert:raw-process', '过程记录原始数据 0x1A / 0x1E', [
-                  _kv('0x1A 城市轨道 / 公交', '未保留'),
-                  _kv('0x1E 循环记录 1', '42 字节'),
-                  _gap(10),
-                  _hexBox(
-                    _spacedHex(
-                      (c.data.raw['shanghai'] as Map)['sfi1e'] as String,
-                    ),
-                  ),
-                ], initiallyOpen: true),
-              ],
-            },
-        ],
-      ),
-    ),
-  ], id: 'expert');
+            ),
+          ),
+        ], id: 'expert');
 
   String _spacedHex(String value) =>
       RegExp(r'.{1,2}').allMatches(value).map((m) => m.group(0)).join(' ');

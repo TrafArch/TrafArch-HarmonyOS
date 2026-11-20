@@ -166,9 +166,15 @@ extension _GalleryOverlays on _GalleryViewState {
       key: ValueKey('save-${c.generation}'),
       initialName: c.current.name,
       onCancel: c.back,
-      onSubmit: (name) {
-        c.save(name);
-        _toast('已保存到卡包');
+      onSubmit: (name) async {
+        if (!c.isLive) {
+          c.save(name);
+          _toast('已保存到卡包');
+          return;
+        }
+        final saved = await c.saveCurrent(name);
+        if (!mounted || saved) return;
+        _toast('未能确认保存，请检查卡包', type: GalleryFeedbackType.error);
       },
     ),
     GalleryOverlay.rename => _GalleryNameForm(
@@ -466,7 +472,7 @@ extension _GalleryOverlays on _GalleryViewState {
           _kv('交易后余额', trip['balanceAfter'] as String?),
         _gap(16),
         _text(
-          '本行程为内置样例摘要。未保留各侧原始字段，不据此补造记录。',
+          c.isLive ? '显示本次读取可确认的记录字段。' : '本行程为内置样例摘要。未保留各侧原始字段，不据此补造记录。',
           role: GalleryTypography.caption,
           color: t.muted,
         ),

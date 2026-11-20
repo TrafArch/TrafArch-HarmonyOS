@@ -1,0 +1,25 @@
+# Flutter 鸿蒙宿主
+
+本仓库只支持 HarmonyOS。根目录的 `build-profile.json5` 注册 `entry/`，这是唯一原生宿主。默认入口 `lib/main.dart` 在同意协议后直接加载原版 Flutter 2.x 页面，不走预览开关、不加载样例，也不初始化 Firebase。`lib/main_gallery.dart` 仅供 2.x 样例预览，不是发布入口。
+
+## 本轮接入
+
+- 鸿蒙宿主实现原有 NFC MethodChannel、应用私有目录以及 HTTPS 外部链接。NFC 处理的是发现、连接、收发与关闭；复用 Dart 的只读卡片协议，不在 ArkTS 维护第二套解析器。关闭超时不会放行下一次连接。
+- 2.x 首页调用真实业务依赖，专家页显示本次标签技术字段，支持把已识别的卡片保存到原有 Drift 档案。行程和档案详情目前展示原版快照中的交易明细；完整行程投影、其他记录类型和历史批次浏览仍待接入。
+- 扫码、卡面与卡包管理、导入导出、知识库页面和现场恢复尚未接入鸿蒙。不用预览功能冒充实际能力。原参考库和清单不改动。
+
+## Windows 构建
+
+使用 DevEco Studio 26 / API 26，以及 [CPF-Flutter SDK](https://gitcode.com/CPF-Flutter/flutter_flutter) 提交 `c5880c605eb77e82d5585cef24d7b4228d84a84d`。浅克隆需要同时获取祖先标签 `3.47.7+ohos-0.0.1-canary`，否则 Flutter 可能报告 `0.0.0-unknown`，无法解析依赖。Windows 下 Hvigor 项目缓存需要创建目录链接；若报 `EPERM ... symlink`，请在允许创建符号链接的环境运行（例如启用 Windows 开发人员模式）。
+
+```powershell
+.\dev\harmony\build_hap.ps1 -FlutterRoot 'D:\usually\flutter-ohos-c5880c6'
+```
+
+脚本从根目录调用 Hvigor 构建 `entry`，不再复制项目。它把本地构建依赖放在忽略目录，不修改共享 Pub 缓存或依赖锁文件。SQLite 源码固定为 3.54.0 并核对 SHA-256；仅鸿蒙目标用 OHOS NDK 的 ARM64 目标和 sysroot 编译，避免 Flutter 的 Linux 兼容分支选到依赖 GLIBC 的预编译库。通过校验的未签名包位于 `build/harmony/TrafArch-ohos-arm64-debug-unsigned.hap`（`-Mode release` 对应 `release`）。发布和上机需独立处理签名。
+
+要用 DevEco 的构建按钮，先将上面的构建命令加上 `-PrepareOnly`，然后用 **File → Open** 打开仓库根目录。此后可以在同一目录运行 `ohpm install --all`，在 DevEco 选择 `entry` 构建。若手动运行 `flutter pub get` 刷新了包配置，再运行一次 `-PrepareOnly` 恢复 OHOS SQLite 构建配置。
+
+Windows 桌面测试使用上游 Flutter：先用该 SDK 运行 `flutter pub get --enforce-lockfile`，再运行 `flutter test --no-pub`。不要混用上游 Flutter 的测试进程和 OHOS SDK 生成的包配置；回到 DevEco 构建前重新执行 `-PrepareOnly`。
+
+设备验收仍需覆盖：首次同意、实际贴卡、取消和掉卡、切后台、连续换卡、离线站名、重启后打开卡包，以及目标机型上的 FeliCa／八达通。

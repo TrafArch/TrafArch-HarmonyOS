@@ -181,6 +181,15 @@ class GalleryController extends ChangeNotifier {
   GalleryCard get current => cards.firstWhere((c) => c.id == 'shanghai');
   GalleryCard get selectedCard =>
       cards.firstWhere((c) => c.id == selectedCardId, orElse: () => current);
+  bool get isLive => false;
+  bool get canSaveCurrent => hasRead && !current.saved;
+  String? get readNotice => null;
+  String? get archiveNotice => null;
+  Map<String, String> get readMetadata => const {};
+  Future<bool> saveCurrent(String name) async {
+    save(name);
+    return true;
+  }
 
   /// Monet follows the card currently shown on the home page (spec §5.2).
   /// Preset gradient faces derive a seed immediately; a custom photo uses the

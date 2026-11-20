@@ -1,10 +1,8 @@
 {
   "name": "entry",
   "version": "1.0.0",
-  "description": "Please describe the basic information.",
-  "main": "",
-  "author": "",
-  "license": "",
-  "dependencies": {}
+  "dependencies": {
+    "@ohos/flutter_ohos": "file:./.flutter-engine/flutter_embedding_debug.har",
+    "flutter_native_arm64_v8a": "file:./.flutter-engine/arm64_v8a_debug.har"
+  }
 }
-

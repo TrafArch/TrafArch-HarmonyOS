@@ -1,24 +1,34 @@
 {
   "app": {
-    "signingConfigs": [],
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\kajolno\\.ohos\\config\\default_TrafArch-Harmony_qouuJxlDAK6xmuCss7oeu02WnNVHRCdLyM72os2d1_A=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001BB105F6CA0ED06419C8D82C1CD5C3D7F4468C95C740AA19C1579992F2FA02A17DFD4A0BCE431C0A",
+          "profile": "C:\\Users\\kajolno\\.ohos\\config\\default_TrafArch-Harmony_qouuJxlDAK6xmuCss7oeu02WnNVHRCdLyM72os2d1_A=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\kajolno\\.ohos\\config\\default_TrafArch-Harmony_qouuJxlDAK6xmuCss7oeu02WnNVHRCdLyM72os2d1_A=.p12",
+          "storePassword": "0000001B522DCA7E3DC419E7381D7A7BA664449547E2D88041522EC1AB7B21165CEE94D3B249CF1FD8DCC4"
+        }
+      }
+    ],
     "products": [
       {
         "name": "default",
-        "signingConfig": "default",
-        "targetSdkVersion": "26.0.0",
         "compatibleSdkVersion": "26.0.0",
-        "runtimeOS": "HarmonyOS",
-        "buildOption": {
-          "strictMode": {
-            "caseSensitiveCheck": true,
-            "useNormalizedOHMUrl": true
-          }
-        }
+        "targetSdkVersion": "26.0.0",
+        "runtimeOS": "HarmonyOS"
       }
     ],
     "buildModeSet": [
       {
-        "name": "debug",
+        "name": "debug"
+      },
+      {
+        "name": "profile"
       },
       {
         "name": "release"

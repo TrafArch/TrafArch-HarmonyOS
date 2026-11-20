@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:transit_card_analyzer/app/app_dependencies.dart';
 import 'package:transit_card_analyzer/app/navigation/app_shell.dart';
@@ -279,39 +278,12 @@ void main() {
     },
   );
 
-  test('Android bridge rejects stale and malformed notices before business handling', () async {
-    final bridge = AndroidMemoryPlatform();
-    var calls = 0;
-    bridge.listen((kill) async {
-      calls++;
-      return kill;
-    });
+  test('未接入系统恢复时不读取或写入恢复现场', () async {
+    final bridge = MemoryPlatform.create();
     addTearDown(bridge.dispose);
-    const codec = StandardMethodCodec();
-    Future<Object?> send(Object? args) async {
-      final reply = Completer<ByteData?>();
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .handlePlatformMessage(
-            AndroidMemoryPlatform.channel.name,
-            codec.encodeMethodCall(MethodCall('onMemoryPressure', args)),
-            reply.complete,
-          );
-      return codec.decodeEnvelope((await reply.future)!);
-    }
-
-    expect(await send({'kill': true, 'expiresAtMillis': 0}), isFalse);
-    expect(await send({'kill': 'true'}), isFalse);
-    expect(calls, 0);
-    expect(
-      await send({
-        'kill': true,
-        'expiresAtMillis': DateTime.now()
-            .add(const Duration(seconds: 2))
-            .millisecondsSinceEpoch,
-      }),
-      isTrue,
-    );
-    expect(calls, 1);
+    expect(await bridge.readRecovery(), isNull);
+    await expectLater(bridge.writeRecovery('{}'), throwsUnsupportedError);
+    await bridge.clearRecovery();
   });
 
   testWidgets(

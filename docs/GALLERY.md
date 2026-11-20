@@ -1,6 +1,6 @@
 # TrafArch 2.x 界面 Gallery
 
-设计基线为 Demo 2.4.0，采用独立 Flutter 页面、组件、主题和导航；色彩、字体、阴影及交互以根 [design.md](../design.md) 为现行规范，长期偏好见 [设计记忆](DESIGN_MEMORY.md)。正式 NFC、协议、档案与参考数据库不作迁移。
+设计基线为 Demo 2.4.0，采用独立 Flutter 页面、组件、主题和导航；色彩、字体、阴影及交互以根 [design.md](../design.md) 为现行规范，长期偏好见 [设计记忆](DESIGN_MEMORY.md)。本文的样例行为仅适用于设计预览；[鸿蒙正式版](HARMONY_FLUTTER.md)使用相同界面并接入真实读卡与档案。
 
 ## 运行与切换
 
@@ -8,11 +8,7 @@
 flutter run -t lib/main_gallery.dart
 ```
 
-预览入口首次启动先显示 2.x 风格的协议确认弹窗，可点按 EULA 与隐私政策阅读官网全文。同意记录与普通入口共用，仅在本机保存；查看全文、拒绝或按返回键均不视为同意。设置底部“关于 TrafArch”保留两个全文入口。
-
-支持 Firebase 分析的版本会在该弹窗中预选分析开关，点「同意并继续」前不启用采集。可取消选择后继续，也可在「设置 → 隐私 → Firebase 分析」随时更改；不影响本地日志、卡片和行程，界面切换不会重置选择。
-
-确认后默认进入现有界面。在“设置 → 外观”开启“启用新界面（beta）”，新版设置末尾“预览”分区的同名开关可以关闭。重启恢复现有界面；普通 `lib/main.dart` 入口不显示内部开关。切换会销毁离开的界面会话，新版不会接收真实卡片或业务设置；预测性返回偏好由宿主单独保存。
+预览入口首次启动先显示 2.x 风格的协议确认弹窗；确认后直接进入 2.x 样例界面，不提供切换到旧界面的开关，也不启用 Firebase。预览不会读实体卡或修改真实档案。正式构建走 `lib/main.dart`，不使用样例入口。
 
 新版设置按 spec 2.3 组织为读卡与数据、外观、日志、帮助与支持、关于 TrafArch 与末尾预览分区。About 信息内联展示，不再有独立关于页；样例管理与恢复初始样例入口已移除，冻结数据仍保留全部 52 个场景供内部使用。足迹暂时停用，从首页、底栏和设置隐藏入口，不提供启用开关，页面前端与样例保留供以后恢复。初始首页未读取，卡包含深圳通、Suica、八达通三个样例；悬浮底栏、跟随系统、莫奈系统取色（不可用时回退靛蓝），自动保存／上海透支／日志关闭。模拟读取延迟 1600ms，二维码获取延迟 700ms；重置、进入扫码及离开界面会取消对应任务。应用可见内容统一使用“内置样例”等表述，移除“测试”“演示”和 Demo 版本标签；样例来源与尚未保存文件的提示仍明确保留。
 
@@ -68,21 +64,7 @@ node dev/gallery/extract_demo.cjs '<TrafArch-UI-Redesign 目录>'
 
 ## 构建与验证
 
-签名配置继续使用仓库外的 `key.properties` 和对应 keystore。为构建进程设置 `TRAFARCH_SIGNING_PROPERTIES`，然后执行：
-
-```powershell
-flutter build apk --release -t lib/main_gallery.dart --target-platform android-arm64 --split-per-abi
-```
-
-内部 target 默认应用 Google Services 并包含 Firebase Analytics，可在确实需要离线预览包时通过 `--android-project-arg galleryAnalytics=false` 显式关闭。现有界面关闭自动更新检查。名称固定 TrafArch，包名固定 `com.kajolno.TrafArch`，主版本名沿用源码，每次生成安装包预留下一构建号；当前 Gradle 使用 `force-version-code-ignoring-abi=true`，Android versionCode 与源码本次构建号一致，不叠加 ABI 偏移。最终仍核验 AAB/APK 实际清单、证书、对齐和 SHA256。
-
-打包前检查各分支已消耗的构建号及可用交付／设备记录，选择尚未使用的新号。核验时明确传入本次源码构建号与最新已消耗 Android 版本码基线，不以历史固定版本码代替升级比较：
-
-```powershell
-python -X utf8 dev/gallery/verify_apk.py '<APK路径>' --build-tools '<Android build-tools目录>' --output '<核验输出目录>' --expected-build-number <本次构建号> --min-version-code <已消耗版本码基线>
-```
-
-脚本核验版本名、名称、包名、arm64 ABI、构建号与实际 versionCode 一致、原签名、Release 标记、Gallery 资产、Firebase 自动初始化与 Analytics 组件存在、ZIP CRC／16KiB 对齐及每个原生库的 ELF LOAD 对齐。调用时通过 `--expected-version-name` 传入当前版本名。输出 `apk-verification.json` 与 `SHA256SUMS.txt`，任一检查失败均以非零状态退出；核验报告不代表已完成设备安装。
+本仓库不构建 APK。鸿蒙安装包见[鸿蒙构建说明](HARMONY_FLUTTER.md)；以下测试可验证共享 Dart 和 2.x 界面，不依赖设备。
 
 ```powershell
 flutter test

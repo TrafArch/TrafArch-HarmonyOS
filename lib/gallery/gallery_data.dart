@@ -105,6 +105,7 @@ class GalleryScene {
 class GalleryCard {
   GalleryCard.fromJson(GalleryRecord json)
     : id = json['id'] as String,
+      liveCurrencyCode = null,
       saved = json['saved'] as bool,
       name = json['name'] as String,
       tail = json['tail'] as String,
@@ -134,7 +135,26 @@ class GalleryCard {
             },
       );
 
+  GalleryCard.live({
+    required this.id,
+    required this.name,
+    this.saved = false,
+    this.pan = '未读取',
+    this.tail = '—',
+    this.rawBalance = '暂不可用',
+    this.city = '未知',
+    this.type = '未知',
+    this.valid = '—',
+    this.when = '',
+    this.count = '—',
+    this.face = 'blue',
+    this.applications = const [],
+    this.liveCurrencyCode = '',
+  }) : detailCrop = const GalleryFaceCrop(),
+       listCrop = const GalleryFaceCrop();
+
   final String id;
+  final String? liveCurrencyCode;
   bool saved;
   String name;
   final String tail;
@@ -165,6 +185,7 @@ class GalleryCard {
     GalleryFaceCrop? detailCrop,
     GalleryFaceCrop? listCrop,
   }) : id = other.id,
+       liveCurrencyCode = other.liveCurrencyCode,
        saved = other.saved,
        name = other.name,
        tail = other.tail,
@@ -208,6 +229,7 @@ class GalleryCard {
 
   String balance(bool includeOverdraft) {
     if (unknownBalance) return '暂不可用';
+    if (liveCurrencyCode != null) return rawBalance;
     if (currency == GalleryCurrency.jpy) {
       return GalleryBalancePresentation.parse(
         rawBalance,

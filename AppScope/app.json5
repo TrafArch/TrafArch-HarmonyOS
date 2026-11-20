@@ -1,11 +1,10 @@
 {
   "app": {
     "bundleName": "com.kajolno.TrafArch",
-    "vendor": "example",
-    "versionCode": 1000000,
-    "versionName": "1.0.0",
-    "buildVersion": "1",
-    "icon": "$media:layered_image",
+    "vendor": "TrafArch",
+    "versionCode": 2216,
+    "versionName": "1.0.8.2",
+    "icon": "$media:trafarch_icon",
     "label": "$string:app_name"
   }
 }

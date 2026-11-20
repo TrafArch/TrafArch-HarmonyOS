@@ -121,7 +121,7 @@ class _GalleryAppState extends State<GalleryApp> {
           home: Scaffold(
             body: Center(
               child: snapshot.hasError
-                  ? const Text('样例数据加载失败，请重新打开应用')
+                  ? const Text('数据加载失败，请重新打开应用')
                   : const CircularProgressIndicator(),
             ),
           ),

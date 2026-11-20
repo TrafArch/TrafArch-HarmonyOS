@@ -17,7 +17,9 @@ extension _GalleryPages on _GalleryViewState {
     final reading = state == GalleryReadState.reading;
     final failed = state == GalleryReadState.failed;
     final showResult = hasRead && !reading && !failed;
-    final recent = c.trips.where((r) => r['kind'] != 'event').firstOrNull;
+    final recent = c.trips
+        .where((r) => c.isLive || r['kind'] != 'event')
+        .firstOrNull;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -54,7 +56,11 @@ extension _GalleryPages on _GalleryViewState {
                 child: Semantics(
                   liveRegion: true,
                   child: _text(
-                    failed ? '读取失败，保留上次结果' : '今天 09:41 读取成功',
+                    c.isLive
+                        ? (c.readNotice ?? '${card.when} 读取完成')
+                        : failed
+                        ? '读取失败，保留上次结果'
+                        : '今天 09:41 读取成功',
                     role: GalleryTypography.caption,
                     color: failed ? t.warn : t.onTone,
                   ),
@@ -78,6 +84,7 @@ extension _GalleryPages on _GalleryViewState {
               ? 12
               : 28,
         ),
+        if (reading && c.isLive) Center(child: _button('取消读取', c.cancelRead)),
         if (!reading)
           if (!hasRead || failed)
             Center(
@@ -96,28 +103,29 @@ extension _GalleryPages on _GalleryViewState {
               children: [
                 Expanded(
                   child: _button(
-                    card.saved ? '再次读取' : '保存卡片',
-                    card.saved
-                        ? () => c.read()
-                        : () => c.showOverlay(GalleryOverlay.save),
-                    primary: true,
-                    icon: card.saved
-                        ? Icons.refresh_rounded
-                        : Icons.save_outlined,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _button(
-                    card.saved ? '更换卡面' : '再次读取',
-                    card.saved
-                        ? () => c.showOverlay(GalleryOverlay.face, card: card)
+                    c.canSaveCurrent ? '保存卡片' : '再次读取',
+                    c.canSaveCurrent
+                        ? () => c.showOverlay(GalleryOverlay.save)
                         : () => c.read(),
-                    icon: card.saved
-                        ? Icons.palette_outlined
+                    primary: true,
+                    icon: c.canSaveCurrent
+                        ? Icons.save_outlined
                         : Icons.refresh_rounded,
                   ),
                 ),
+                if (!c.isLive || c.canSaveCurrent) const SizedBox(width: 10),
+                if (!c.isLive || c.canSaveCurrent)
+                  Expanded(
+                    child: _button(
+                      card.saved ? '更换卡面' : '再次读取',
+                      card.saved
+                          ? () => c.showOverlay(GalleryOverlay.face, card: card)
+                          : () => c.read(),
+                      icon: card.saved
+                          ? Icons.palette_outlined
+                          : Icons.refresh_rounded,
+                    ),
+                  ),
               ],
             ),
         if (failed && hasRead) ...[
@@ -126,6 +134,8 @@ extension _GalleryPages on _GalleryViewState {
           _gap(12),
           _face(card),
         ],
+        if (failed && c.isLive && c.readNotice != null)
+          _text(c.readNotice!, role: GalleryTypography.caption, color: t.warn),
         if (showResult) ...[
           _gap(16),
           if (recent != null)
@@ -137,13 +147,13 @@ extension _GalleryPages on _GalleryViewState {
                     children: [
                       Expanded(
                         child: _text(
-                          '最近一次行程',
+                          c.isLive ? '最近一条交易' : '最近一次行程',
                           role: GalleryTypography.caption,
                           color: t.muted,
                         ),
                       ),
                       _text(
-                        '今天',
+                        c.isLive ? '${recent['date']}' : '今天',
                         role: GalleryTypography.caption,
                         color: t.muted,
                       ),
@@ -156,7 +166,11 @@ extension _GalleryPages on _GalleryViewState {
               padding: const EdgeInsets.fromLTRB(14, 14, 14, 0),
             )
           else
-            _empty('暂无行程记录', '这张卡片没有可展示的行程', icon: Icons.route_outlined),
+            _empty(
+              '暂无行程记录',
+              c.isLive ? '本次尚无可展示的行程' : '这张卡片没有可展示的行程',
+              icon: Icons.route_outlined,
+            ),
           Padding(
             padding: const EdgeInsets.only(top: 20),
             child: Column(
@@ -186,12 +200,13 @@ extension _GalleryPages on _GalleryViewState {
               ? 12
               : 32,
         ),
-        _text(
-          '模拟数据',
-          role: GalleryTypography.caption,
-          color: t.muted,
-          align: showResult ? TextAlign.left : TextAlign.center,
-        ),
+        if (!c.isLive)
+          _text(
+            '模拟数据',
+            role: GalleryTypography.caption,
+            color: t.muted,
+            align: showResult ? TextAlign.left : TextAlign.center,
+          ),
       ],
     );
   }
@@ -668,6 +683,9 @@ extension _GalleryPages on _GalleryViewState {
 
   Widget _cards() {
     final cards = c.savedCards;
+    if (c.archiveNotice case final String notice when c.isLive) {
+      return _list([_empty('本地档案不可用', notice)]);
+    }
     final ids = cards.map((card) => card.id).toSet();
     if (_walletCardIds != null)
       _walletArrivals.addAll(ids.difference(_walletCardIds!));
@@ -843,6 +861,18 @@ extension _GalleryPages on _GalleryViewState {
                           ),
                       itemBuilder: (context, index) {
                         final card = cards[index];
+                        if (c.isLive) {
+                          return Padding(
+                            key: ValueKey('wallet-item-${card.id}'),
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: _walletCardSurface(
+                              card,
+                              id: 'wallet',
+                              numberWidth: numberWidth,
+                              onTap: () => c.openCard(card),
+                            ),
+                          );
+                        }
                         return _GalleryWalletItem(
                           key: ValueKey('wallet-item-${card.id}'),
                           id: card.id,
@@ -1101,46 +1131,50 @@ extension _GalleryPages on _GalleryViewState {
             c.setAutoSave,
             subtitle: '每次读取后保存到当前卡包',
           ),
-          const Divider(),
-          _switch(
-            '上海交通卡可透支余额',
-            c.includeOverdraft,
-            (value) => c.update(() => c.includeOverdraft = value),
-            subtitle:
-                '总余额${c.includeOverdraft ? '包含' : '扣除'}固定 8 元额度，CU 余额不重复扣除',
-          ),
-          const Divider(),
-          _settingRow(
-            '知识库',
-            () => c.navigate(GalleryPage.knowledge),
-            subtitle: 'TU 41 个地区 / CU 7 个地区',
-            icon: Icons.menu_book_outlined,
-          ),
+          if (!c.isLive) ...[
+            const Divider(),
+            _switch(
+              '上海交通卡可透支余额',
+              c.includeOverdraft,
+              (value) => c.update(() => c.includeOverdraft = value),
+              subtitle:
+                  '总余额${c.includeOverdraft ? '包含' : '扣除'}固定 8 元额度，CU 余额不重复扣除',
+            ),
+            const Divider(),
+            _settingRow(
+              '知识库',
+              () => c.navigate(GalleryPage.knowledge),
+              subtitle: 'TU 41 个地区 / CU 7 个地区',
+              icon: Icons.menu_book_outlined,
+            ),
+          ],
         ],
       ),
       padding: EdgeInsets.zero,
     ),
-    _sectionTitle('数据与备份'),
-    _panel(
-      Column(
-        children: [
-          _settingRow(
-            '导出卡片记录',
-            () => c.export(all: true),
-            subtitle: '预览全部已保存卡片的记录，不保存文件',
-            icon: Icons.download_outlined,
-          ),
-          const Divider(),
-          _settingRow(
-            '导入卡片记录',
-            _importCardRecords,
-            subtitle: '选择备份文件预览内容，不修改当前样例',
-            icon: Icons.upload_outlined,
-          ),
-        ],
+    if (!c.isLive) ...[
+      _sectionTitle('数据与备份'),
+      _panel(
+        Column(
+          children: [
+            _settingRow(
+              '导出卡片记录',
+              () => c.export(all: true),
+              subtitle: '预览全部已保存卡片的记录，不保存文件',
+              icon: Icons.download_outlined,
+            ),
+            const Divider(),
+            _settingRow(
+              '导入卡片记录',
+              _importCardRecords,
+              subtitle: '选择备份文件预览内容，不修改当前样例',
+              icon: Icons.upload_outlined,
+            ),
+          ],
+        ),
+        padding: EdgeInsets.zero,
       ),
-      padding: EdgeInsets.zero,
-    ),
+    ],
     _sectionTitle('外观'),
     _panel(
       Column(
@@ -1290,36 +1324,38 @@ extension _GalleryPages on _GalleryViewState {
       ),
       padding: EdgeInsets.zero,
     ),
-    _sectionTitle('隐私'),
-    _panel(const FirebaseAnalyticsTile(), padding: EdgeInsets.zero),
-    _sectionTitle('日志'),
-    _panel(
-      Column(
-        children: [
-          _switch(
-            '启用运行日志',
-            c.logsEnabled,
-            c.setLogs,
-            subtitle: '仅记录本次会话中的界面操作',
-          ),
-          _collapse(
-            c.logsEnabled,
-            (_) => Column(
-              children: [
-                const Divider(),
-                _settingRow(
-                  '导出日志',
-                  () => c.export(log: true),
-                  subtitle: '预览模拟日志，不保存文件',
-                  icon: Icons.download_outlined,
-                ),
-              ],
+    if (!c.isLive) ...[
+      _sectionTitle('隐私'),
+      _panel(const FirebaseAnalyticsTile(), padding: EdgeInsets.zero),
+      _sectionTitle('日志'),
+      _panel(
+        Column(
+          children: [
+            _switch(
+              '启用运行日志',
+              c.logsEnabled,
+              c.setLogs,
+              subtitle: '仅记录本次会话中的界面操作',
             ),
-          ),
-        ],
+            _collapse(
+              c.logsEnabled,
+              (_) => Column(
+                children: [
+                  const Divider(),
+                  _settingRow(
+                    '导出日志',
+                    () => c.export(log: true),
+                    subtitle: '预览模拟日志，不保存文件',
+                    icon: Icons.download_outlined,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        padding: EdgeInsets.zero,
       ),
-      padding: EdgeInsets.zero,
-    ),
+    ],
     _sectionTitle('帮助与支持'),
     _panel(
       _settingRow(

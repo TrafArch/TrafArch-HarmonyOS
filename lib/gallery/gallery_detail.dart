@@ -19,10 +19,12 @@ extension _GalleryDetail on _GalleryViewState {
     final card = _selectedCard;
     final ledger = c.ledger(card);
     final body = switch (c.detailTab) {
+      1 when c.isLive => [_empty('消费统计尚未接入', '可先查看已保存的交易明细。')],
       1 => _spendingChildren(card),
       2 => _cardInformation(card),
       _ => <Widget>[
-        if (ledger.isEmpty) _empty('暂无交易记录', '卡内记录可能不完整'),
+        if (ledger.isEmpty)
+          _empty('暂无交易记录', c.isLive ? '没有可展示的交易明细' : '卡内记录可能不完整'),
         for (final record in ledger)
           Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -38,11 +40,12 @@ extension _GalleryDetail on _GalleryViewState {
             ],
           ),
         _gap(16),
-        _text(
-          '仅展示样例中保留的记录，可能不代表完整历史。',
-          role: GalleryTypography.caption,
-          color: t.muted,
-        ),
+        if (!c.isLive)
+          _text(
+            '仅展示样例中保留的记录，可能不代表完整历史。',
+            role: GalleryTypography.caption,
+            color: t.muted,
+          ),
       ],
     };
     const navHeight = 56.0;
@@ -235,30 +238,31 @@ extension _GalleryDetail on _GalleryViewState {
               ),
             ),
           ),
-          _actionGroup('page', [
-            _menuAnchor(
-              'detail-card-${card.id}',
-              _icon(
-                Icons.more_horiz_rounded,
-                '${card.name} 管理',
-                () => _openDropdown(
-                  GalleryOverlay.cardMenu,
-                  'detail-card-${card.id}',
-                  card: card,
+          if (!c.isLive)
+            _actionGroup('page', [
+              _menuAnchor(
+                'detail-card-${card.id}',
+                _icon(
+                  Icons.more_horiz_rounded,
+                  '${card.name} 管理',
+                  () => _openDropdown(
+                    GalleryOverlay.cardMenu,
+                    'detail-card-${card.id}',
+                    card: card,
+                  ),
+                  outlined: false,
+                  grouped: true,
                 ),
+              ),
+              _icon(
+                Icons.download_outlined,
+                '导出本卡记录',
+                () => c.export(),
                 outlined: false,
                 grouped: true,
+                color: t.text,
               ),
-            ),
-            _icon(
-              Icons.download_outlined,
-              '导出本卡记录',
-              () => c.export(),
-              outlined: false,
-              grouped: true,
-              color: t.text,
-            ),
-          ]),
+            ]),
         ],
       ),
     );
@@ -277,48 +281,51 @@ extension _GalleryDetail on _GalleryViewState {
               ('有效期', card.valid == '—' ? '未知' : '${card.valid}（未记录日）'),
               ('当前余额', card.balance(c.includeOverdraft)),
               ('最近读取', card.when),
-              ('协议', card.type == 'FeliCa' ? 'FeliCa' : 'ISO-DEP / 交通联合'),
+              if (!c.isLive)
+                ('协议', card.type == 'FeliCa' ? 'FeliCa' : 'ISO-DEP / 交通联合'),
             ])
               _kv(row.$1, row.$2),
           ],
         ),
       ),
-      Padding(
-        padding: const EdgeInsets.only(top: 16, bottom: 8),
-        child: Row(
-          key: const ValueKey('detail-raw-header'),
-          children: [
-            Expanded(child: _text('原始数据', role: GalleryTypography.section)),
-            if (raw is Map) ...[
-              _icon(
-                Icons.copy_outlined,
-                '复制原始数据',
-                () {
-                  Clipboard.setData(
-                    ClipboardData(text: '${raw['sfi18']}\n${raw['sfi1e']}'),
-                  );
-                  _toast('已复制模拟原始数据');
-                },
-                outlined: false,
-                grouped: true,
-              ),
-              _icon(
-                Icons.feedback_outlined,
-                '原始数据反馈预览',
-                () => c.showOverlay(GalleryOverlay.rawFeedback),
-                outlined: false,
-                grouped: true,
-              ),
+      if (!c.isLive) ...[
+        Padding(
+          padding: const EdgeInsets.only(top: 16, bottom: 8),
+          child: Row(
+            key: const ValueKey('detail-raw-header'),
+            children: [
+              Expanded(child: _text('原始数据', role: GalleryTypography.section)),
+              if (raw is Map) ...[
+                _icon(
+                  Icons.copy_outlined,
+                  '复制原始数据',
+                  () {
+                    Clipboard.setData(
+                      ClipboardData(text: '${raw['sfi18']}\n${raw['sfi1e']}'),
+                    );
+                    _toast('已复制模拟原始数据');
+                  },
+                  outlined: false,
+                  grouped: true,
+                ),
+                _icon(
+                  Icons.feedback_outlined,
+                  '原始数据反馈预览',
+                  () => c.showOverlay(GalleryOverlay.rawFeedback),
+                  outlined: false,
+                  grouped: true,
+                ),
+              ],
             ],
-          ],
+          ),
         ),
-      ),
-      _text('模拟样例', role: GalleryTypography.caption, color: t.muted),
-      _gap(8),
-      if (raw is Map)
-        _hexBox('SFI 0x18\n${raw['sfi18']}\n\nSFI 0x1E\n${raw['sfi1e']}')
-      else
-        _text('本样例未保留原始数据', role: GalleryTypography.caption, color: t.muted),
+        _text('模拟样例', role: GalleryTypography.caption, color: t.muted),
+        _gap(8),
+        if (raw is Map)
+          _hexBox('SFI 0x18\n${raw['sfi18']}\n\nSFI 0x1E\n${raw['sfi1e']}')
+        else
+          _text('本样例未保留原始数据', role: GalleryTypography.caption, color: t.muted),
+      ],
     ];
   }
 

@@ -434,6 +434,7 @@ class AppDependencies extends OwnedNotifier {
 
   CardRepository get cardRepository => archive.repository;
   PendingCardSave? get pendingCardSave => archive.pending;
+  PendingCardSave? get lastCapture => _completedCapture;
   String? get lastCardFingerprint => archive.fingerprint;
   IdentifiedCard? get lastIdentified => archive.identified;
   NfcScanResult? get lastResult => scan.tag;
