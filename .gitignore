@@ -12,3 +12,6 @@
 /.appanalyzer
 /Trafarch.csr
 /TrafArch.p12
+/.dart_tool/
+/.flutter-plugins-dependencies
+/coverage/

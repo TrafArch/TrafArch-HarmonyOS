@@ -1,0 +1,727 @@
+import 'dart:convert';
+
+import 'package:drift/drift.dart' show Value;
+
+import '../../../protocols/transit/card_parser.dart';
+import '../../transit_analysis/balance_interpretation.dart';
+import '../../transit_analysis/tunion_analysis_models.dart';
+import '../../../shared/domain/archive_conflict_policy.dart';
+import '../../transit_analysis/process_journey_positions.dart';
+import '../../../platform/storage/log_exporter.dart';
+import '../../../platform/nfc/nfc_models.dart';
+import '../../../protocols/transit/tunion/tunion_models.dart';
+import '../../../protocols/transit/tunion/tunion_process_parser.dart';
+import 'card_records_export.dart';
+import 'cu_archive_projection.dart';
+import 'suica_archive_capture.dart';
+import 'amusement_ic_archive_capture.dart';
+import '../domain/card_session_snapshot.dart';
+import '../domain/pending_card_save.dart';
+import '../data/card_repository.dart';
+import '../data/app_database.dart';
+import '../domain/archive_balance.dart';
+import 'archive_history.dart';
+import 'archive_application_display.dart';
+import 'card_identification_service.dart';
+import '../../../shared/application/owned_notifier.dart';
+import '../../scan/domain/captured_frame.dart';
+import '../../scan/domain/scan_presentation.dart';
+
+/// Owns pending-save identity and archive side effects. A dialog can only act
+/// on the exact read that was shown, even after the next NFC session starts.
+class ArchiveController extends OwnedNotifier {
+  ArchiveController(this.repository, this.exporter, this.log);
+  final CardRepository repository;
+  final LogExporter exporter;
+  final void Function(String) log;
+  PendingCardSave? pending;
+  IdentifiedCard? identified;
+  String? fingerprint;
+  String? autoSaveNotice;
+  int _generation = 0;
+  final Set<Future<bool>> _writes = {};
+
+  void clearSession() {
+    ++_generation;
+    pending = null;
+    identified = null;
+    fingerprint = null;
+    autoSaveNotice = null;
+    notifyListeners();
+  }
+
+  void stage(
+    ScanPresentation view,
+    String attemptId,
+    DateTime readAt,
+    List<CapturedFrame> frames, {
+    List<NfcMetadataIssue> metadataIssues = const [],
+  }) {
+    if (disposed) return;
+    final parsed = view.parsedCard;
+    if (parsed == null) {
+      try {
+        final item =
+            captureAmusementIcArchive(
+              view,
+              attemptId,
+              readAt,
+              frames,
+              metadataIssues,
+            ) ??
+            captureSuicaArchive(
+              view,
+              attemptId,
+              readAt,
+              frames,
+              metadataIssues,
+            );
+        if (item == null) return;
+        pending = item;
+        fingerprint = item.fingerprint;
+        identified = IdentifiedCard(
+          fingerprint: item.fingerprint,
+          identity: item.identity,
+        );
+        notifyListeners();
+      } catch (e) {
+        log('FeliCa 归档准备失败：$e');
+      }
+      return;
+    }
+    try {
+      final identity = CardIdentificationService(view.knowledge)
+          .identify(parsed, analysisIdentity: view.analysis?.identity);
+      if (identity == null) return;
+      final balance = view.balanceInterpretation;
+      final separateObservation =
+          CardParserIds.isTUnionFamily(parsed.parserId) &&
+          balance?.semantics != BalanceSemantics.direct;
+      final observedBalanceFen =
+          parsed.localCard?.info.observedBalance ?? parsed.info.balanceFen;
+      // Ordinary cards retain their established currency policy. Unknown TU
+      // identities keep the integer but cannot acquire a currency from metadata.
+      final currency = separateObservation
+          ? balance?.observedCurrency
+          : view.cardCurrency.code;
+      final packages = <String, dynamic>{
+        for (final e in view.knowledge.packageVersions.entries)
+          e.key: {
+            'contentVersion': e.value,
+            'sha256': view.knowledge.packageHashes[e.key],
+          },
+      };
+      final trips = view.analysis?.trips ?? const <TransitTrip>[];
+      // Archive protocol observations before the current-page presentation
+      // suppresses a same-mode record from a different file.
+      final railSources = <TUnionProcessRecord>[];
+      final rails = <TransitRecord>[];
+      final busSources = <TUnionProcessRecord>[];
+      final buses = <BusTransitRecord>[];
+      for (final record in parsed.transitProcessRecords) {
+        if (record.sfi != 0x1A || record.isBlank) continue;
+        final rail = record.railTransit;
+        final bus = record.busTransit;
+        if (rail != null) {
+          rails.add(rail);
+          railSources.add(record);
+        }
+        if (bus != null) {
+          buses.add(bus);
+          busSources.add(record);
+        }
+      }
+      if (rails.isEmpty) {
+        for (final record in parsed.transitProcessRecords) {
+          if (record.sfi != 0x1A ||
+              record.recordNumber != 0 ||
+              record.isBlank) {
+            continue;
+          }
+          final rail = const TUnionProcessParser().parseRailTransit(
+            1,
+            record.raw,
+          );
+          if (rail != null) {
+            rails.add(rail);
+            railSources.add(record);
+          }
+        }
+      }
+      final transactionsObserved =
+          parsed.transactionFileObserved ||
+          parsed.transactions.isNotEmpty ||
+          (parsed.localCard?.trips.isNotEmpty ?? false) ||
+          (parsed.localCard?.info.isMacauPass == true &&
+              parsed.localCard!.records.any(
+                (record) => record.label == '澳门通交易记录',
+              )) ||
+          (parsed.parserId == CardParserIds.cityUnion &&
+              view.cityUnionTransactions.isNotEmpty);
+      final processPositions = buildProcessJourneyPositions(
+        parsed.transitProcessRecords,
+      );
+      final context = ArchiveContext(
+        systemId: parsed.parserId,
+        applicationId: parsed.selectedAidHex,
+        currencyCode: currency,
+        minorUnitDigits: 2,
+        timeZoneOffsetMinutes: null,
+        extensions: {
+          'captureDeviceOffsetMinutes': readAt.timeZoneOffset.inMinutes,
+          if (separateObservation) 'balanceInterpretation': balance!.toJson(),
+        },
+        clockBasis: 'device-local-card-time-unverified',
+        referencePackages: Map.unmodifiable(packages),
+        observedFields: {
+          'cardNumber': identity.cardNumber != null,
+          'balanceFen': observedBalanceFen != null,
+          'transactionCount': transactionsObserved,
+        },
+      );
+      final snapshot = CardSessionSnapshot(
+        parseVersion: kTripParseVersion,
+        context: context,
+        extensions: {
+          'captureAttemptId': attemptId,
+          if (view.applications.isNotEmpty)
+            'applicationEvidence': [
+              for (final application in view.applications) application.toJson(),
+            ],
+          if (parsed.localCard?.info.isBmac == true)
+            'beijingBmac': {
+              'cardNumber': parsed.localCard!.info.cardNumber,
+              'balanceFen': parsed.localCard!.info.observedBalance,
+              'readError': parsed.localCard!.readError?.toString(),
+              'observations': parsed.localCard!.extras.slots,
+            },
+          if (parsed.localCard?.info.isLNT == true)
+            'lingnanTong': {
+              'cardNumber': parsed.localCard!.info.cardNumber,
+              'issuerCode': parsed.localCard!.info.issuerCode,
+              'balanceFen': parsed.localCard!.info.observedBalance,
+              'readError': parsed.localCard!.readError?.toString(),
+              'observations': parsed.localCard!.extras.slots,
+              'records': [
+                for (final record in parsed.localCard!.trips)
+                  {
+                    'profile': 'lingnan',
+                    'recordNumber': record.recordNumber,
+                    'fileSelector': record.fileSelector,
+                    'timestamp': record.timestamp.millisecondsSinceEpoch,
+                    'type': record.type,
+                    'subtype': record.posType,
+                    'statusCode': record.statusCode,
+                    'amountDelta': record.balanceDelta,
+                    'terminalHex': record.terminalHex,
+                    'isMetro': record.isMetro,
+                    'yearInferred': true,
+                    'secondsKnown': false,
+                    'rawBody': record.rawBody == null
+                        ? null
+                        : List<int>.of(record.rawBody!),
+                  },
+              ],
+            },
+          if (parsed.localCard?.info.isMacauPass == true)
+            'macauPass': {
+              'cardNumber': parsed.localCard!.info.cardNumber,
+              'balance': parsed.localCard!.info.observedBalance,
+              'currencyCode': parsed.localCard!.info.currencyCode,
+              'records': [
+                for (final record in parsed.localCard!.records.where(
+                  (record) => record.label == '澳门通交易记录',
+                ))
+                  {
+                    'recordNumber': record.recordNumber,
+                    'fileSelector': record.fileSelector,
+                    'timestamp': record.timestamp.millisecondsSinceEpoch,
+                    'rawBody': record.rawBody == null
+                        ? null
+                        : List<int>.of(record.rawBody!),
+                  },
+              ],
+            },
+          // 通用地方卡（武汉通 / 北京互通卡 / 深圳通本地 / 苏州苏薪·计次 /
+          // 天府通，parserId=localCard）：保存解析出的行程流水，历史详情与
+          // 恢复现场经同一票据式行程卡展示；澳门通 / BMAC 保留专属扩展。
+          if (parsed.parserId == CardParserIds.localCard &&
+              parsed.localCard != null &&
+              !parsed.localCard!.info.isMacauPass)
+            'localCardTrips': {
+              'cardKindLabel': parsed.localCard!.info.cardKindLabel,
+              'version': 1,
+              'records': [
+                for (final record in parsed.localCard!.trips)
+                  {
+                    if (parsed.localCard!.info.isSZT) 'profile': 'shenzhen',
+                    'recordNumber': record.recordNumber,
+                    'fileSelector': record.fileSelector,
+                    'statusCode': record.statusCode,
+                    'posType': record.posType,
+                    'timestamp': record.timestamp.millisecondsSinceEpoch,
+                    'balanceDelta': record.balanceDelta,
+                    'cityCode': record.cityCode,
+                    'isMetro': record.isMetro,
+                    'isBus': record.isBus,
+                    'isFerry': record.isFerry,
+                    'isOtherA': record.isOtherA,
+                    'isOtherB': record.isOtherB,
+                    'terminalHex': record.terminalHex,
+                    'label': record.label,
+                    // 原始字节：rawBody 缺失时回退 response（武汉通 /
+                    // TripRecordReader 行程仅写入 response）。
+                    'rawBody': (record.rawBody ?? record.response) == null
+                        ? null
+                        : List<int>.of(record.rawBody ?? record.response!),
+                  },
+              ],
+            },
+          if (parsed.parserId == CardParserIds.shenzhenTunion &&
+              parsed.localCard != null)
+            'shenzhenTong': {
+              'cardNumber': parsed.localCard!.info.cardNumber,
+              'balanceFen': parsed.localCard!.info.observedBalance,
+              'rawInfo': parsed.localCard!.info.rawInfo,
+              'readError': parsed.localCard!.readError?.toString(),
+              'observations': parsed.localCard!.extras.slots,
+              'records': [
+                for (final record in parsed.localCard!.trips)
+                  {
+                    'profile': 'shenzhen',
+                    'recordNumber': record.recordNumber,
+                    'fileSelector': record.fileSelector,
+                    'statusCode': record.statusCode,
+                    'posType': record.posType,
+                    'timestamp': record.timestamp.millisecondsSinceEpoch,
+                    'balanceDelta': record.balanceDelta,
+                    'cityCode': record.cityCode,
+                    'isMetro': record.isMetro,
+                    'isBus': record.isBus,
+                    'terminalHex': record.terminalHex,
+                    'label': record.label,
+                    'rawBody': (record.rawBody ?? record.response) == null
+                        ? null
+                        : List<int>.of(record.rawBody ?? record.response!),
+                    'hasError': record.hasError,
+                  },
+              ],
+            },
+          if (view.cityUnionTransactions.isNotEmpty)
+            'cuProjection': captureCuProjection(view.cityUnionTransactions),
+        },
+        cardCityCode: view.cardCityCode,
+        trips: view.analysis?.trips ?? const [],
+        rails: rails,
+        buses: buses,
+        processTrips: view.cycleProcessTrips,
+        rawEvidence: [
+          for (final issue in metadataIssues)
+            {
+              'kind': 'native_metadata_issue',
+              'sessionId': attemptId,
+              ...issue.toJson(),
+            },
+          for (final frame in frames) frame.toJson(),
+          for (final file in parsed.cityUnionFiles)
+            {'kind': 'cu_file', 'parserId': parsed.parserId, ...file.toJson()},
+          for (final record in parsed.transitProcessRecords)
+            {
+              'kind': 'tu_process_record',
+              'sfi': record.sfi,
+              'recordNumber': record.recordNumber,
+              'recordNumberIsReliable': record.recordNumberIsReliable,
+              'rawHex': record.rawHex,
+            },
+          for (final transaction in parsed.transactions)
+            {'kind': 'tu_transaction', 'rawHex': transaction.rawHex},
+        ],
+        recordProvenance: {
+          'parserId': parsed.parserId,
+          'parseVersion': kTripParseVersion,
+          'referencePackages': packages,
+          for (var i = 0; i < trips.length; i++)
+            'trips[$i]': {
+              'parseVersion': kTripParseVersion,
+              'referencePackages': packages,
+              'rawHex': trips[i].rawHex,
+              'terminalId': trips[i].terminalId,
+              'ruleId': trips[i].location?.ruleId,
+              'lineCode': trips[i].location?.lineCode,
+              'stationCode': trips[i].location?.stationCode,
+              'stationConfidence': trips[i].stationConfidence?.name,
+            },
+          for (var i = 0; i < rails.length; i++)
+            'rails[$i]': {
+              'parseVersion': kTripParseVersion,
+              'referencePackages': packages,
+              'rawHex': rails[i].rawHex,
+              'sfi': railSources[i].sfi,
+              'recordNumber': railSources[i].recordNumber,
+              'capturedDisplay': captureRailApplicationDisplay(
+                view.knowledge,
+                rails[i],
+              ),
+            },
+          for (var i = 0; i < buses.length; i++)
+            'buses[$i]': {
+              'parseVersion': kTripParseVersion,
+              'referencePackages': packages,
+              'rawHex': buses[i].rawHex,
+              'sfi': busSources[i].sfi,
+              'recordNumber': busSources[i].recordNumber,
+              'capturedDisplay': captureBusApplicationDisplay(
+                view.knowledge,
+                buses[i],
+              ),
+            },
+          for (var i = 0; i < view.cycleProcessTrips.length; i++)
+            'cycle[$i]': {
+              'parseVersion': kTripParseVersion,
+              'referencePackages': packages,
+              'rawHex': view.cycleProcessTrips[i].rawHex,
+              'capturedDisplay': captureProcessDisplay(
+                view.knowledge,
+                view.cycleProcessTrips[i],
+              ),
+              if (processPositions[view.cycleProcessTrips[i]]?['live']
+                  case final position?) ...{
+                'sfi': 0x1E,
+                'recordNumber': position,
+                'recordNumberIsReliable': true,
+              },
+            },
+          'rawApplicationSerial': parsed.info.applicationSerial,
+          'rawCityCode': parsed.info.cityCode,
+          'tuBalanceFen': parsed.info.balanceFen,
+          'cuBalanceFen': parsed.cityUnionBalanceFen,
+        },
+      );
+      identified = identity;
+      fingerprint = identity.fingerprint;
+      pending = PendingCardSave(
+        pendingSaveId: attemptId,
+        readAt: readAt,
+        fingerprint: identity.fingerprint,
+        identity: identity.identity,
+        cardNumber: identity.cardNumber,
+        balanceFen: observedBalanceFen,
+        currencyCode: currency,
+        transactionCount: transactionsObserved
+            ? (parsed.localCard?.info.isMacauPass == true
+                  ? parsed.localCard!.records
+                        .where((r) => r.label == '澳门通交易记录')
+                        .length
+                  : parsed.parserId == CardParserIds.lingnanTong
+                  ? parsed.localCard!.trips.length
+                  : parsed.parserId == CardParserIds.lingnanTunion ||
+                        parsed.parserId == CardParserIds.shenzhenTunion
+                  ? parsed.transactions.length + parsed.localCard!.trips.length
+                  : parsed.parserId == CardParserIds.localCard
+                  ? parsed.localCard!.trips.length
+                  : parsed.parserId == CardParserIds.cityUnion
+                  ? view.cityUnionTransactions.length
+                  : parsed.transactions.length)
+            : null,
+        sessionDataJson: snapshot.encode(),
+      );
+      notifyListeners();
+    } catch (e) {
+      log('卡片归档准备失败：$e');
+    }
+  }
+
+  Future<bool> accept(
+    String id, {
+    int? capturedParseVersion,
+    ArchiveConflictPolicy conflictPolicy = ArchiveConflictPolicy.overwrite,
+  }) async {
+    final item = pending;
+    if (disposed || item == null || item.pendingSaveId != id) return false;
+    final generation = _generation;
+    final exists = await cardExists(item.fingerprint);
+    if (disposed || generation != _generation || pending?.pendingSaveId != id) {
+      return false;
+    }
+    if (exists) {
+      if (conflictPolicy == ArchiveConflictPolicy.skip) {
+        pending = null;
+        autoSaveNotice = '已跳过：${item.displayName}（记录已存在）';
+        notifyListeners();
+        return true;
+      }
+      if (conflictPolicy == ArchiveConflictPolicy.ask) {
+        // The UI must resolve the conflict before storing.
+        return false;
+      }
+    }
+    pending = null;
+    notifyListeners();
+    final operation = _save(item, parseVersion: capturedParseVersion);
+    _writes.add(operation);
+    final ok = await operation;
+    _writes.remove(operation);
+    if (!ok && !disposed && generation == _generation && pending == null) {
+      pending = item; // Allow retry without losing the captured read.
+      notifyListeners();
+    }
+    return ok;
+  }
+
+  /// Add the locally read HKD wallet balance to this read's archive snapshot.
+  ///
+  /// The TU scalar stays in [SavedCards.balanceFen] as the original CNY
+  /// observation. The independent NFC-F reading is stored as a
+  /// [VerifiedAccountBalance] inside the captured balance interpretation, which
+  /// is what archive history uses to show the account balance. Only the current
+  /// read is updated: a card saved by this attempt is matched by `lastReadAt`,
+  /// and a still-pending save carries the same evidence when the user confirms.
+  Future<void> attachVerifiedAccountBalance({
+    required String fingerprint,
+    required DateTime readAt,
+    required int balanceMinor,
+    required String evidenceSource,
+  }) async {
+    if (disposed || fingerprint != this.fingerprint) return;
+    final verified = VerifiedAccountBalance(
+      amountMinor: balanceMinor,
+      currency: 'HKD',
+      evidenceSource: evidenceSource,
+    );
+    final item = pending;
+    if (item != null && item.fingerprint == fingerprint) {
+      final updated = _withVerifiedAccountBalance(
+        item.sessionDataJson,
+        verified,
+      );
+      if (updated != null && updated != item.sessionDataJson) {
+        pending = PendingCardSave(
+          pendingSaveId: item.pendingSaveId,
+          readAt: item.readAt,
+          fingerprint: item.fingerprint,
+          identity: item.identity,
+          cardNumber: item.cardNumber,
+          balanceFen: item.balanceFen,
+          currencyCode: item.currencyCode,
+          transactionCount: item.transactionCount,
+          sessionDataJson: updated,
+        );
+        notifyListeners();
+      }
+    }
+    try {
+      final saved = await (repository.db.select(
+        repository.db.savedCards,
+      )..where((t) => t.cardFingerprint.equals(fingerprint))).getSingleOrNull();
+      if (saved == null || saved.lastReadAt != readAt.millisecondsSinceEpoch) {
+        return;
+      }
+      final updated = _withVerifiedAccountBalance(
+        saved.sessionDataJson,
+        verified,
+      );
+      if (updated == null || updated == saved.sessionDataJson) return;
+      await (repository.db.update(repository.db.savedCards)
+            ..where((t) => t.id.equals(saved.id)))
+          .write(SavedCardsCompanion(sessionDataJson: Value(updated)));
+      await repository.refreshDocument(saved.id);
+      if (!disposed) notifyListeners();
+    } catch (e) {
+      log('八达通余额写入档案失败：$e');
+    }
+  }
+
+  String? _withVerifiedAccountBalance(
+    String? payload,
+    VerifiedAccountBalance verified,
+  ) {
+    if (payload == null) return null;
+    final decoded = CardSessionSnapshot.decodeResult(payload);
+    if (decoded.formatVersion != 3 ||
+        decoded.status != SnapshotDecodeStatus.supported) {
+      return null;
+    }
+    final root = jsonDecode(payload);
+    if (root is! Map<String, dynamic>) return null;
+    final context = root['context'];
+    if (context is! Map<String, dynamic>) return null;
+    final raw = context['balanceInterpretation'];
+    if (raw is! Map<String, dynamic>) return null;
+    final interpretation = Map<String, dynamic>.of(raw)
+      ..['verifiedAccountBalance'] = verified.toJson()
+      ..['accountCurrency'] = 'HKD'
+      ..['accountBalanceMinor'] = verified.amountMinor;
+    final resolved = BalanceInterpretation.fromJson(interpretation);
+    if (!resolved.isOctopusTunion ||
+        resolved.accountBalanceMinor != verified.amountMinor) {
+      return null;
+    }
+    context['balanceInterpretation'] = interpretation;
+    root['context'] = context;
+    return jsonEncode(root);
+  }
+
+  Future<bool> cardExists(String fingerprint) async {
+    try {
+      final existing = await (repository.db.select(
+        repository.db.savedCards,
+      )..where((t) => t.cardFingerprint.equals(fingerprint))).getSingleOrNull();
+      return existing != null;
+    } catch (e) {
+      log('卡片档案存在性检查失败：$e');
+      return false;
+    }
+  }
+
+  Future<bool> _save(PendingCardSave item, {int? parseVersion}) async {
+    try {
+      await repository.db.transaction(() async {
+        final existing =
+            await (repository.db.select(repository.db.savedCards)
+                  ..where((t) => t.cardFingerprint.equals(item.fingerprint)))
+                .getSingleOrNull();
+        final previousSource = existing == null
+            ? null
+            : (await ArchiveHistory(repository).load(existing.id))
+                  .balanceSource;
+        var payload = item.sessionDataJson;
+        if (item.balanceFen == null &&
+            previousSource != null &&
+            payload != null) {
+          payload = withRetainedBalanceSource(payload, previousSource);
+        }
+        await repository.saveIdentity(
+          fingerprint: item.fingerprint,
+          identity: item.identity,
+          cardNumber: item.cardNumber,
+          balanceFen: item.balanceFen,
+          currencyCode: item.currencyCode,
+          transactionCount: item.transactionCount,
+          sessionDataJson: payload,
+          parseVersion: parseVersion ?? kTripParseVersion,
+          readAt: item.readAt,
+        );
+        // A late full observation may update the retained balance while the
+        // newest envelope remains partial. Refresh only its source extension;
+        // original capture batches and their timestamps remain immutable.
+        final saved =
+            await (repository.db.select(repository.db.savedCards)
+                  ..where((t) => t.cardFingerprint.equals(item.fingerprint)))
+                .getSingle();
+        final latest = saved.sessionDataJson;
+        final snapshot = latest == null
+            ? null
+            : CardSessionSnapshot.decode(latest);
+        if (latest != null &&
+            snapshot?.formatVersion == 3 &&
+            !snapshotObservesBalance(snapshot)) {
+          final history = await ArchiveHistory(repository).load(saved.id);
+          var source = history.balanceSource;
+          final readAt = item.readAt?.millisecondsSinceEpoch;
+          // Equal timestamps are accepted by the repository. The just-saved
+          // attempt identifies the winner even when the old scalar was equal.
+          if (item.balanceFen != null &&
+              readAt != null &&
+              history.balanceObservedAt == readAt) {
+            final captures = history.batches.where(
+              (batch) =>
+                  batch.decoded.snapshot?.extensions['captureAttemptId'] ==
+                      item.pendingSaveId &&
+                  snapshotBalanceMatches(saved, batch.decoded.snapshot),
+            );
+            if (captures.length == 1) {
+              final capture = captures.single;
+              source = ArchiveBalanceSource(
+                payloadJson: capture.decoded.rawJson,
+                batchId: capture.id,
+                observedAt: readAt,
+              );
+            } else {
+              source = null;
+            }
+          }
+          final updated = withRetainedBalanceSource(latest, source);
+          if (updated != latest) {
+            await (repository.db.update(repository.db.savedCards)
+                  ..where((t) => t.id.equals(saved.id)))
+                .write(SavedCardsCompanion(sessionDataJson: Value(updated)));
+          }
+        }
+        await repository.refreshDocument(saved.id);
+      });
+      return true;
+    } catch (e) {
+      log('卡片档案保存失败：$e');
+      return false;
+    }
+  }
+
+  void decline(String id) {
+    if (pending?.pendingSaveId != id) return;
+    pending = null;
+    notifyListeners();
+  }
+
+  Future<void> autoSave({
+    ArchiveConflictPolicy policy = ArchiveConflictPolicy.overwrite,
+  }) async {
+    final item = pending;
+    if (item == null) return;
+    final generation = _generation;
+    final exists = await cardExists(item.fingerprint);
+    if (disposed ||
+        generation != _generation ||
+        pending?.pendingSaveId != item.pendingSaveId) {
+      return;
+    }
+    if (exists) {
+      if (policy == ArchiveConflictPolicy.ask) {
+        // Leave the pending capture in place; the home presenter will ask.
+        notifyListeners();
+        return;
+      }
+      if (policy == ArchiveConflictPolicy.skip) {
+        decline(item.pendingSaveId);
+        autoSaveNotice = '已跳过：${item.displayName}（记录已存在）';
+        notifyListeners();
+        return;
+      }
+    }
+    final ok = await accept(
+      item.pendingSaveId,
+      conflictPolicy: ArchiveConflictPolicy.overwrite,
+    );
+    if (disposed || generation != _generation) return;
+    autoSaveNotice = ok
+        ? exists
+              ? '已更新保存：${item.displayName}（历史记录已保留）'
+              : '已自动保存：${item.displayName}'
+        : '自动保存失败：${item.displayName}';
+    notifyListeners();
+  }
+
+  void clearNotice() {
+    autoSaveNotice = null;
+    notifyListeners();
+  }
+
+  Future<void> finishWrites() async => Future.wait(_writes.toList());
+
+  Future<String> exportCards() async {
+    try {
+      final histories = await ArchiveHistory(repository).loadAll();
+      if (histories.isEmpty) return '暂无卡片记录可导出';
+      final now = DateTime.now();
+      final content = buildArchiveHistoryExport(histories, exportedAt: now);
+      final stamp = now.toIso8601String().replaceAll(RegExp(r'[^0-9]'), '');
+      final path = await exporter.saveToDownloads(
+        'transit_card_records_$stamp.txt',
+        content,
+      );
+      return '已导出 ${histories.length} 张卡片到下载目录：$path';
+    } catch (e) {
+      log('卡片导出失败：$e');
+      return '导出失败：$e';
+    }
+  }
+}

@@ -1,0 +1,207 @@
+import 'tunion_models.dart';
+
+/// Strong same-operation evidence for a 1A side and a 1E record. This is a
+/// display relationship only; no amounts or raw records are rewritten.
+bool matchesTunionJourneySide({
+  required bool isEntry,
+  required bool isRail,
+  required DateTime? time,
+  required String? cityCode,
+  required String? terminalId,
+  required int? amountFen,
+  required TUnionTripRecord cycle,
+  String? stationId,
+  int? lineCode,
+  String? agencyId,
+}) {
+  String normalize(String? value) =>
+      (value ?? '').replaceAll(RegExp(r'\s+'), '').toUpperCase();
+  final city = normalize(cityCode);
+  final terminal = normalize(terminalId);
+  if (cycle.appTypeCode == 0x0A) {
+    // Observed Shaoxing intercity EP layout (2026-11-04): 1A uses a
+    // provincial entry city and a different terminal namespace. Both sources
+    // must independently agree on receiver, side, time, money and compact
+    // station/gate bytes. This is not a city alias or a time-only display link.
+    final station = normalize(stationId);
+    final field = normalize(cycle.lineStationCode);
+    return isRail &&
+        time != null &&
+        time == cycle.time &&
+        cycle.typeCode == (isEntry ? 0x03 : 0x04) &&
+        normalize(cycle.cityCode) == '3370' &&
+        (city == '3370' || (isEntry && city == '3300')) &&
+        normalize(agencyId) == '03493370FFFFFFFF' &&
+        normalize(cycle.acquirerId) == '03493370FFFFFFFF' &&
+        amountFen != null &&
+        amountFen == cycle.amountFen &&
+        RegExp(r'^413101\d{6}0000$').hasMatch(normalize(cycle.terminalId)) &&
+        RegExp(r'^411230500000[0-9A-F]{4}$').hasMatch(station) &&
+        RegExp(r'^30500000[0-9A-F]{8}$').hasMatch(terminal) &&
+        RegExp(r'^[0-9A-F]{8}000000$').hasMatch(field) &&
+        station.substring(12) == field.substring(0, 4) &&
+        terminal.substring(8) == field.substring(0, 8) &&
+        lineCode != null &&
+        lineCode > 0 &&
+        lineCode == int.parse(field.substring(0, 2), radix: 16);
+  }
+  final sameSide =
+      time != null &&
+      time == cycle.time &&
+      RegExp(r'^[0-9A-F]{4}$').hasMatch(city) &&
+      !RegExp(r'^[0F]+$').hasMatch(city) &&
+      city == normalize(cycle.cityCode) &&
+      RegExp(r'^[0-9A-F]{16}$').hasMatch(terminal) &&
+      !RegExp(r'^0+$|^F+$').hasMatch(terminal) &&
+      (isRail ? cycle.isCityRail : cycle.isBus) &&
+      (isEntry
+          ? const {0x01, 0x03}.contains(cycle.journeyTypeCode)
+          : const {0x02, 0x04}.contains(cycle.journeyTypeCode)) &&
+      (amountFen == null || amountFen == cycle.amountFen);
+  if (!sameSide) return false;
+  if (terminal == normalize(cycle.terminalId)) return true;
+
+  // Beijing writes BCD line/station ordinals in its 1A station and terminal,
+  // but binary ordinals and a different terminal namespace in 1E. This
+  // observed EP metro layout is not a general time-only or station-name alias.
+  final station = normalize(stationId);
+  final field = normalize(cycle.lineStationCode);
+  final agency = normalize(agencyId);
+  if (!isRail ||
+      city != '1000' ||
+      cycle.appTypeCode != 0x01 ||
+      !const {0x03, 0x04}.contains(cycle.typeCode) ||
+      amountFen == null ||
+      !RegExp(r'^100075130900\d{4}$').hasMatch(station) ||
+      !RegExp(r'^100075131F\d{4}[0-9A-F]{2}$').hasMatch(terminal) ||
+      !RegExp(r'^00003000[0-9A-F]{8}$').hasMatch(normalize(cycle.terminalId)) ||
+      terminal.substring(10, 14) != station.substring(12) ||
+      !RegExp(r'^[0-9A-F]{14}$').hasMatch(field) ||
+      !RegExp(r'^[0-9A-F]{16}$').hasMatch(agency) ||
+      RegExp(r'^0+$|^F+$').hasMatch(agency) ||
+      agency != normalize(cycle.acquirerId)) {
+    return false;
+  }
+  final line = int.parse(station.substring(12, 14));
+  final stop = int.parse(station.substring(14));
+  return line > 0 &&
+      stop > 0 &&
+      lineCode == line &&
+      int.parse(field.substring(0, 2), radix: 16) == line &&
+      int.parse(field.substring(2, 6), radix: 16) == stop;
+}
+
+/// 展示关联，不是余额锚点：秒级时间相等 OR 有效基础 POS 被扩展 POS 包含。
+bool matchesTunionDisplay({
+  required DateTime? basicTime,
+  required String? basicPos,
+  required DateTime? extendedTime,
+  required String? extendedPos,
+}) {
+  if (basicTime != null &&
+      extendedTime != null &&
+      basicTime.millisecondsSinceEpoch ~/ 1000 ==
+          extendedTime.millisecondsSinceEpoch ~/ 1000) {
+    return true;
+  }
+  String normalize(String? value) =>
+      (value ?? '').replaceAll(RegExp(r'\s+'), '').toUpperCase();
+  bool valid(String value) =>
+      value.isNotEmpty &&
+      RegExp(r'^[0-9A-F]+$').hasMatch(value) &&
+      !RegExp(r'^0+$|^F+$').hasMatch(value);
+  final basic = normalize(basicPos);
+  final extended = normalize(extendedPos);
+  return valid(basic) &&
+      !basic.contains('00000000') &&
+      valid(extended) &&
+      extended.contains(basic);
+}
+
+/// 同一来源先分配全部秒级对应，再按 POS 补缺；同强度候选保持原顺序。
+/// 来源之间独立占用，终端复用不能抢占另一事件已知的精确时间对应。
+Map<int, int> matchTunionDisplayEvents<B, E>(
+  List<B> basics,
+  List<E> events, {
+  required DateTime? Function(B) basicTime,
+  required String? Function(B) basicPos,
+  required DateTime? Function(E) eventTime,
+  required String? Function(E) eventPos,
+}) {
+  final result = <int, int>{};
+  final usedEvents = <int>{};
+  for (final exactTime in [true, false]) {
+    for (var event = 0; event < events.length; event++) {
+      if (usedEvents.contains(event)) continue;
+      for (var basic = 0; basic < basics.length; basic++) {
+        if (result.containsKey(basic)) continue;
+        if (matchesTunionDisplay(
+          basicTime: basicTime(basics[basic]),
+          basicPos: exactTime ? null : basicPos(basics[basic]),
+          extendedTime: eventTime(events[event]),
+          extendedPos: exactTime ? null : eventPos(events[event]),
+        )) {
+          result[basic] = event;
+          usedEvents.add(event);
+          break;
+        }
+      }
+    }
+  }
+  return result;
+}
+
+/// 只标识展示证据，不参与金融账本。保留侧与原始记录，供快照恢复去重。
+String tunionDisplayKey(
+  String source,
+  DateTime? time,
+  String? pos,
+  String? raw, [
+  Object? detail,
+]) =>
+    '$source|${time?.millisecondsSinceEpoch}|${pos?.replaceAll(RegExp(r'\s+'), '').toUpperCase()}|$raw|$detail';
+
+String cycleDisplayKey(TUnionTripRecord record) => tunionDisplayKey(
+  '1E',
+  record.time,
+  record.terminalId,
+  record.rawHex,
+  '${record.typeCode}:${record.amountFen}:${record.lineStationCode}',
+);
+
+class TunionApplicationSide {
+  const TunionApplicationSide({this.rail, this.bus, required this.isEntry});
+  final TransitRecord? rail;
+  final BusTransitRecord? bus;
+  final bool isEntry;
+  DateTime? get time => isEntry
+      ? rail?.entryTime ?? bus?.entryTime
+      : rail?.exitTime ?? bus?.exitTime;
+  String? get terminal => isEntry
+      ? rail?.entryTerminalId ?? bus?.entryTerminalId
+      : rail?.exitTerminalId ?? bus?.exitTerminalId;
+  String get key => tunionDisplayKey(
+    rail != null ? '1A-rail-$isEntry' : '1A-bus-$isEntry',
+    time,
+    terminal,
+    rail?.rawHex ?? bus?.rawHex,
+  );
+}
+
+List<TunionApplicationSide> tunionApplicationSides(
+  List<TUnionProcessRecord> records,
+) => [
+  for (final record in records)
+    if (record.sfi == 0x1A && !record.isBlank)
+      for (final entry in [true, false])
+        if ((entry
+                ? record.railTransit?.entryTime ?? record.busTransit?.entryTime
+                : record.railTransit?.exitTime ??
+                      record.busTransit?.exitTime) !=
+            null)
+          TunionApplicationSide(
+            rail: record.railTransit,
+            bus: record.busTransit,
+            isEntry: entry,
+          ),
+];

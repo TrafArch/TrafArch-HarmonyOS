@@ -1,0 +1,581 @@
+import 'dart:convert';
+
+import 'station_codes.dart';
+import 'tunion_bus_caller.dart';
+
+/// Offline inputs with separate namespaces for rail keys and local terminals.
+/// No issuer fallback or record mutation is permitted at this boundary.
+abstract interface class TuLookupDataSource {
+  String? get queryIssue;
+  Iterable<StationCodeEntry> railCandidates(String city);
+  List<StationCodeEntry> localTerminalCandidates(
+    String sourceField,
+    String terminal,
+  );
+  List<TuLookupValue> terminalAliases(String terminal);
+  List<TuLookupValue> processTerminalCandidates(String city, String terminal);
+  List<TuLookupValue> railHistory(String key);
+}
+
+/// Optional access to the original rail rows inside each city table.
+/// These remain city-owned source keys, not a shared supplemental namespace.
+abstract interface class TuCityRailFieldSource {
+  Iterable<StationCodeEntry> cityRailFieldCandidates(String city);
+}
+
+/// Intercity locations stay in their native city tables. This optional source
+/// admits only complete station rows below a source-classified intercity line;
+/// it never exposes a nationwide station-suffix search.
+abstract interface class TuIntercityRailSource {
+  Iterable<TuIntercityRailCandidate> intercityRailCandidates(String city);
+}
+
+class TuIntercityRailCandidate {
+  const TuIntercityRailCandidate({
+    required this.city,
+    required this.prefix,
+    required this.station,
+  });
+
+  final String city;
+  final TuLookupValue prefix;
+  final StationCodeEntry station;
+}
+
+class TuLookupValue {
+  final String sourceField;
+  final String sourceKey;
+  final Object? rawValue;
+
+  const TuLookupValue(this.sourceField, this.sourceKey, this.rawValue);
+
+  StationMatchEvidence get evidence => StationMatchEvidence(
+    sourceField: sourceField,
+    sourceKey: sourceKey,
+    rawValueJson: jsonEncode(rawValue),
+  );
+}
+
+/// Original m756j(type=3), m759m and m761o lookup semantics (Simplified Chinese).
+/// City-specific cycle adapters use only their verified field/terminal slices.
+/// Industry 00 can query a Beijing rail location only with the source-proven
+/// terminal classification. Missing dates use base names, not the current
+/// clock. The caller retains the original record city and application type.
+class TuLookupService {
+  final TuLookupDataSource source;
+  const TuLookupService(this.source);
+
+  StationMatch get _miss => source.queryIssue == null
+      ? StationMatch.unmatched
+      : StationMatch.unavailable;
+
+  StationMatch resolveRailKey({
+    required String? city,
+    required String key,
+    DateTime? time,
+  }) {
+    if (!_validCity(city)) return StationMatch.unmatched;
+    final normalized = key.toUpperCase();
+    if (!RegExp(r'^[0-9A-F]{5,32}$').hasMatch(normalized) ||
+        !normalized.startsWith(city!)) {
+      return StationMatch.unmatched;
+    }
+    final rows = StationCodeTable.longestTuRailCandidates(
+      city,
+      normalized,
+      source.railCandidates(city),
+    );
+    if (source.queryIssue != null) return StationMatch.unavailable;
+    if (rows.isEmpty) return _miss;
+    return _datedRailMatch(rows, normalized, time);
+  }
+
+  StationMatch _datedRailMatch(
+    List<StationCodeEntry> rows,
+    String key,
+    DateTime? time,
+  ) {
+    final evidence = <StationMatchEvidence>[];
+    var candidates = rows;
+    if (time != null) {
+      // The history prefix is selected against the entire input, independently
+      // of the base key length, as in the original nested prefix search.
+      final history = source.railHistory(key);
+      if (source.queryIssue != null) return StationMatch.unavailable;
+      if (history.isNotEmpty) {
+        final longest = history
+            .map((e) => e.sourceKey.length)
+            .reduce((a, b) => a > b ? a : b);
+        for (final item in history.where(
+          (e) => e.sourceKey.length == longest,
+        )) {
+          for (final rawRule in item.rawValue! as List) {
+            final rule = rawRule as List;
+            final cutoff = DateTime.parse(
+              (rule[0] as Map)[r'$date_literal'] as String,
+            );
+            if (!time.isBefore(cutoff)) break;
+            candidates = [
+              for (final row in candidates)
+                // User presentation overrides keep priority over dated names.
+                if (row.userOverride)
+                  row
+                else
+                  _presentation(
+                    row,
+                    type: rule[1] == '*' ? row.type : rule[1] as String,
+                    line: rule[2] == '*' ? row.line : rule[2] as String,
+                    station: rule[3] == '*' ? row.station : rule[3] as String,
+                  ),
+            ];
+            evidence.add(item.evidence);
+          }
+        }
+      }
+    }
+    return StationMatch.fromCandidates(candidates, evidence: evidence);
+  }
+
+  /// Original m762p exact key: city + 16-character process terminal in M0.S.a.
+  StationMatch resolveProcess({
+    required String? city,
+    required String terminal,
+  }) {
+    if (!_validCity(city)) return StationMatch.unmatched;
+    final q = terminal.toUpperCase();
+    if (!RegExp(r'^[0-9A-F]{16}$').hasMatch(q)) return StationMatch.unmatched;
+    final rows = source.processTerminalCandidates(city!, q);
+    if (source.queryIssue != null) return StationMatch.unavailable;
+    if (rows.isEmpty) return _miss;
+    return StationMatch.fromCandidates(
+      [for (final row in rows) _localPresentationRow(row)],
+      evidence: [for (final row in rows) row.evidence],
+    );
+  }
+
+  /// Shenzhen compatibility keys remain owned by TU city 5840, but retain
+  /// their original 5180 prefix and M0.y.b provenance. Never query rail maps.
+  StationMatch resolveShenzhenTerminal({
+    required String? city,
+    required String? terminal,
+  }) {
+    final q = terminal?.toUpperCase();
+    if (city != '5840' ||
+        q == null ||
+        !RegExp(r'^00000002[0-9A-F]{8}$').hasMatch(q)) {
+      return StationMatch.unmatched;
+    }
+    final key = '5180${q.substring(8)}';
+    for (var length = key.length; length >= 5; length--) {
+      final prefix = key.substring(0, length);
+      final rows = source.localTerminalCandidates('M0.y.b', prefix);
+      if (source.queryIssue != null) return StationMatch.unavailable;
+      final candidates = rows
+          .where(
+            (row) =>
+                row.sourceField == 'M0.y.b' &&
+                (row.sourceKey ?? row.code) == prefix,
+          )
+          .toList();
+      if (candidates.isNotEmpty) return StationMatch.fromCandidates(candidates);
+    }
+    return _miss;
+  }
+
+  StationMatch resolveCycle({
+    required String? city,
+    required String field,
+    String? terminalId,
+    DateTime? time,
+    required int? appType,
+  }) {
+    final original = _resolveCycleNative(
+      city: city,
+      field: field,
+      terminalId: terminalId,
+      time: time,
+      appType: appType,
+    );
+    final verified = _verifiedCycleStation(original, city, field, appType);
+    if (verified != null) return verified;
+    final citySource = source;
+    final raw = field.toUpperCase();
+    if (appType != 1 ||
+        !_validCity(city) ||
+        !RegExp(r'^(?:[0-9A-F]{12}|[0-9A-F]{14})$').hasMatch(raw) ||
+        citySource is! TuCityRailFieldSource ||
+        original.confidence == StationMatchConfidence.ambiguous ||
+        original.confidence == StationMatchConfidence.unavailable ||
+        (original.stationName ?? '').trim().isNotEmpty) {
+      return original;
+    }
+    const railKinds = {'metro', 'tram', 'light_rail', 'intercity_rail'};
+    final originalKind = original.entry?.kind;
+    if (originalKind != null && !railKinds.contains(originalKind)) {
+      return original;
+    }
+    final cityCode = city!;
+    final pos = raw.substring(0, 12);
+    final full = '$cityCode$pos';
+    var longest = 0;
+    final candidates = <StationCodeEntry>[];
+    for (final row
+        in (citySource as TuCityRailFieldSource).cityRailFieldCandidates(
+          cityCode,
+        )) {
+      if (row.system != 'tu' || !railKinds.contains(row.kind)) continue;
+      final key = row.sourceKey ?? row.code;
+      // A city-prefixed key consumes four fewer position characters. Equal
+      // position prefixes retain all evidence, irrespective of spelling.
+      final prefixedLength = key.startsWith(cityCode) && full.startsWith(key)
+          ? key.length - cityCode.length
+          : 0;
+      final bareLength = pos.startsWith(key) ? key.length : 0;
+      final consumed = prefixedLength > bareLength
+          ? prefixedLength
+          : bareLength;
+      if (consumed < 4 || consumed > 12 || consumed < longest) continue;
+      if (consumed > longest) {
+        candidates.clear();
+        longest = consumed;
+      }
+      candidates.add(row);
+    }
+    if (source.queryIssue != null) return StationMatch.unavailable;
+    if (candidates.isEmpty) return original;
+    final extra = _datedRailMatch(candidates, full, time);
+    if (extra.confidence == StationMatchConfidence.unavailable) return extra;
+    final line = (original.lineName ?? '').trim();
+    if (line.isNotEmpty &&
+        extra.candidates.any((row) => (row.line ?? '').trim() != line)) {
+      return original;
+    }
+    return StationMatch(
+      extra.entry,
+      extra.confidence,
+      candidates: extra.candidates,
+      evidence: [...original.evidence, ...extra.evidence],
+    );
+  }
+
+  StationMatch? _verifiedCycleStation(
+    StationMatch original,
+    String? city,
+    String field,
+    int? appType,
+  ) {
+    // 2026-11-01 physical capture: both Shiqiao entry and exit carry this
+    // complete 1E position. The packaged Qintai label was inferred from a
+    // station order, not independently observed. Correct only this verified
+    // layout at runtime; do not reverse the other unverified Line 6 codes.
+    if (city != '5210' ||
+        appType != 1 ||
+        !const {'000606510651', '00060651065100'}.contains(field) ||
+        original.confidence != StationMatchConfidence.exact ||
+        original.candidates.isEmpty ||
+        original.candidates.any(
+          (row) =>
+              row.userOverride ||
+              row.system != 'tu' ||
+              row.kind != 'metro' ||
+              row.sourceField != 'M0.W.a' ||
+              row.sourceKey != '521000060651' ||
+              row.line != '6号线' ||
+              row.station != '琴台',
+        )) {
+      return null;
+    }
+    return StationMatch.fromCandidates(
+      [
+        for (final row in original.candidates)
+          _presentation(row, type: row.type, line: row.line, station: '石桥'),
+      ],
+      evidence: [
+        ...original.evidence,
+        const StationMatchEvidence(
+          sourceField: 'TrafArch.verified_cycle_station',
+          sourceKey: '5210/1E/000606510651',
+          rawValueJson:
+              '{"station":"石桥","basis":"user-confirmed-20261101",'
+              '"captureSha256":"8c762b58313cee6238692239105b07184647eaafbf52c45c3740e25394da9ec2"}',
+        ),
+      ],
+    );
+  }
+
+  StationMatch _resolveCycleNative({
+    required String? city,
+    required String field,
+    String? terminalId,
+    DateTime? time,
+    required int? appType,
+  }) {
+    if (!_validCity(city)) return StationMatch.unmatched;
+    final raw = field.toUpperCase();
+    // The parser retains the reserved trailing byte; original pos is 6 bytes.
+    if (!RegExp(r'^(?:[0-9A-F]{12}|[0-9A-F]{14})$').hasMatch(raw)) {
+      return StationMatch.unmatched;
+    }
+    if (appType == 0x0A) return _resolveIntercityCycle(city!, raw, time);
+    final pos = raw.substring(0, 12);
+    final q = terminalId?.toUpperCase();
+    // The Beijing suburban railway capture uses the same full native
+    // city/line/station key as metro, with industry 0E retained verbatim.
+    // Do not enable metro terminal aliases or byte-fragment fallbacks here.
+    if (appType == 0x0E && city == '1000') {
+      return resolveRailKey(city: city, key: '$city$pos', time: time);
+    }
+    if (appType != 0x01) {
+      if (appType != 0x00 || !TunionBusCaller.hasBeijingRailTerminal(city, q)) {
+        return StationMatch.unmatched;
+      }
+      // Resolve only the original city + pos in the native rail source. A
+      // station label does not make this an entry/exit or a refund record.
+      return resolveRailKey(city: city, key: '$city$pos', time: time);
+    }
+    final validTerminal = q != null && RegExp(r'^[0-9A-F]{16}$').hasMatch(q);
+    if (validTerminal) {
+      final exact = resolveProcess(city: city, terminal: q);
+      if (!exact.isUnmatched) return exact;
+    }
+    final shenzhen = resolveShenzhenTerminal(city: city, terminal: q);
+    if (!shenzhen.isUnmatched) return shenzhen;
+    String? special;
+    if (city == '3910' || city == '7010') {
+      special = '$city${pos.substring(2, 4)}${pos.substring(6, 8)}';
+    } else if (city == '4520' && validTerminal && q.startsWith('45200000')) {
+      special = '$city${q.substring(8, 12)}';
+    } else if (city == '3320' && pos.substring(0, 2) != '00') {
+      special = '${city}00${pos.substring(0, 2)}00${pos.substring(2, 4)}';
+    } else if (city == '6510') {
+      special = '$city${pos.substring(4, 8)}';
+    }
+    if (special != null) {
+      final hit = resolveRailKey(city: city, key: special, time: time);
+      if (!hit.isUnmatched) return hit;
+    }
+    final generic = resolveRailKey(city: city, key: '$city$pos', time: time);
+    if (!generic.isUnmatched) return generic;
+    if (city == '7910' &&
+        validTerminal &&
+        q.startsWith('79100000') &&
+        q.substring(8, 10) != '00' &&
+        RegExp(r'^\d{2}$').hasMatch(q.substring(10, 12))) {
+      final station = int.parse(q.substring(10, 12))
+          .toRadixString(16)
+          .toUpperCase()
+          .padLeft(4, '0');
+      return resolveRailKey(
+        city: city,
+        key: '${city}00${q.substring(8, 10)}$station',
+        time: time,
+      );
+    }
+    return _miss;
+  }
+
+  StationMatch _resolveIntercityCycle(String city, String raw, DateTime? time) {
+    final intercitySource = source;
+    if (intercitySource is! TuIntercityRailSource ||
+        raw.length != 14 ||
+        !raw.endsWith('000000')) {
+      return StationMatch.unmatched;
+    }
+    final nativeField = StationCodeTable.tuRailSourceField(city);
+    final byCity = <String, List<TuIntercityRailCandidate>>{};
+    for (final candidate
+        in (intercitySource as TuIntercityRailSource).intercityRailCandidates(
+          city,
+        )) {
+      final row = candidate.station;
+      final prefix = candidate.prefix;
+      final value = prefix.rawValue;
+      final key = row.sourceKey ?? row.code;
+      final owner = candidate.city;
+      // The native source dictionary, application 0A and full field layout
+      // establish the namespace. Names classify a source line, never a city
+      // alias. Two-byte and four-byte source keys are kept distinct.
+      if (!_validCity(owner) ||
+          prefix.sourceField != nativeField ||
+          row.sourceField != prefix.sourceField ||
+          row.system != 'tu' ||
+          !const {'metro', 'intercity_rail'}.contains(row.kind) ||
+          value is! List ||
+          value.length != 3 ||
+          value[1] is! String ||
+          !(value[1] as String).contains('城际') ||
+          value[2] != '' ||
+          !RegExp(r'^[0-9A-F]{6}(?:[0-9A-F]{2})?$')
+              .hasMatch(prefix.sourceKey) ||
+          !prefix.sourceKey.startsWith(owner) ||
+          key.length != (prefix.sourceKey.length == 6 ? 8 : 12) ||
+          !key.startsWith(prefix.sourceKey) ||
+          key != '$owner${raw.substring(0, key.length - 4)}' ||
+          (row.station ?? '').trim().isEmpty) {
+        continue;
+      }
+      byCity.putIfAbsent(owner, () => []).add(candidate);
+    }
+    if (source.queryIssue != null) return StationMatch.unavailable;
+    if (byCity.isEmpty) return _miss;
+    final rows = <StationCodeEntry>[];
+    final evidence = <StationMatchEvidence>[];
+    for (final group in byCity.entries) {
+      final match = _datedRailMatch(
+        [for (final item in group.value) item.station],
+        '${group.key}${raw.substring(0, 12)}',
+        time,
+      );
+      if (match.confidence == StationMatchConfidence.unavailable) return match;
+      rows.addAll(match.candidates);
+      evidence.addAll([
+        ...match.evidence,
+        for (final item in group.value) item.prefix.evidence,
+      ]);
+    }
+    final match = StationMatch.fromCandidates(rows);
+    // Identical labels in two different city mappings still lack a unique
+    // endpoint. Never let display-name equality hide a namespace collision.
+    final confidence = byCity.length > 1
+        ? StationMatchConfidence.ambiguous
+        : match.confidence;
+    return StationMatch(
+      match.entry,
+      confidence,
+      candidates: match.candidates,
+      evidence: evidence,
+      resolvedCityCode: confidence == StationMatchConfidence.exact
+          ? byCity.keys.single
+          : null,
+    );
+  }
+
+  StationMatch resolveBasic({
+    required String? city,
+    required String terminal,
+    DateTime? time,
+  }) {
+    if (!_validCity(city)) return StationMatch.unmatched;
+    final key = terminal.toUpperCase();
+    if (!RegExp(r'^[0-9A-F]{12}$').hasMatch(key)) return StationMatch.unmatched;
+    String? field;
+    if (city == '1610') {
+      field = 'M0.n0.a';
+    } else if (city == '3010') {
+      field = 'M0.E.a';
+    } else if (city == '6510') {
+      field = 'M0.b.a';
+    } else if (const ['3310', '3350', '3370'].contains(city)) {
+      final aliases = source.terminalAliases(key);
+      if (source.queryIssue != null) return StationMatch.unavailable;
+      // m761o tries s, t, u in order. An unresolved alias must not turn into
+      // an unrelated local-terminal fallback, even if C.b contains this key.
+      for (final aliasField in const ['M0.s.a', 'M0.t.a', 'M0.u.a']) {
+        final hits = aliases.where((e) => e.sourceField == aliasField).toList();
+        if (hits.isEmpty) continue;
+        final targets = hits.map((e) => e.rawValue).toSet();
+        if (targets.length != 1) {
+          return StationMatch(
+            null,
+            StationMatchConfidence.ambiguous,
+            evidence: hits.map((e) => e.evidence).toList(),
+          );
+        }
+        final hit = resolveRailKey(
+          city: city,
+          key: '$city${targets.single}',
+          time: time,
+        );
+        return StationMatch(
+          hit.entry,
+          hit.confidence,
+          candidates: hit.candidates,
+          evidence: [...hits.map((e) => e.evidence), ...hit.evidence],
+        );
+      }
+      field = 'M0.C.b';
+    }
+    if (field == null) return StationMatch.unmatched;
+    final rows = source.localTerminalCandidates(field, key);
+    if (source.queryIssue != null) return StationMatch.unavailable;
+    if (rows.isEmpty) return _miss;
+    return StationMatch.fromCandidates([
+      for (final row in rows) _localPresentation(row, field),
+    ]);
+  }
+
+  static bool _validCity(String? city) =>
+      city != null &&
+      RegExp(r'^\d{4}$').hasMatch(city) &&
+      city != '0000' &&
+      city != '9999';
+
+  static StationCodeEntry _localPresentationRow(TuLookupValue row) {
+    final raw = row.rawValue;
+    final list = raw is List ? raw : const [];
+    return _localPresentation(
+      StationCodeEntry(
+        code: row.sourceKey,
+        sourceKey: row.sourceKey,
+        sourceField: row.sourceField,
+        type: list.isNotEmpty ? '${list[0]}' : '',
+        line: list.length > 1 ? '${list[1]}' : '',
+        station: list.isNotEmpty ? '${list.last}' : '',
+        system: 'tu',
+        kind: 'metro',
+        datasetFile: 'tu:lookup',
+        rawValueJson: jsonEncode(raw),
+      ),
+      row.sourceField,
+    );
+  }
+
+  static StationCodeEntry _localPresentation(
+    StationCodeEntry row,
+    String field,
+  ) {
+    if (row.userOverride) return row;
+    final raw = row.rawValueJson == null ? null : jsonDecode(row.rawValueJson!);
+    if (raw is! List || (raw.length != 2 && raw.length != 3)) return row;
+    if (field == 'M0.n0.a' || field == 'M0.C.b') {
+      final line = raw[0] as String;
+      return _presentation(
+        row,
+        type: '',
+        line: RegExp(r'^\d+$').hasMatch(line) ? '$line号线' : line,
+        station: raw[1] as String,
+        kind: field == 'M0.n0.a' ? 'metro' : 'intercity_rail',
+      );
+    }
+    return _presentation(
+      row,
+      type: raw[0] as String,
+      line: raw[1] as String,
+      station: raw[2] as String,
+    );
+  }
+
+  static StationCodeEntry _presentation(
+    StationCodeEntry row, {
+    String? type,
+    String? line,
+    String? station,
+    String? kind,
+  }) => StationCodeEntry(
+    code: row.code,
+    type: type,
+    line: line,
+    station: station,
+    system: row.system,
+    kind: kind ?? row.kind,
+    datasetFile: row.datasetFile,
+    lineCode: row.lineCode,
+    stationCode: row.stationCode,
+    sourceField: row.sourceField,
+    sourceKey: row.sourceKey,
+    rawValueJson: row.rawValueJson,
+    lineKey: row.lineKey,
+    userOverride: row.userOverride,
+    overrideUpdatedAt: row.overrideUpdatedAt,
+  );
+}
