@@ -81,7 +81,11 @@ final code = input.config.code;
             defines: CompilerDefines.defaults(false),
             additionalIncludes: [],
             additionalFlags: [
-              '--target=aarch64-linux-ohos',
+              '--target=${switch (code.targetArchitecture) {
+                Architecture.arm64 => 'aarch64-linux-ohos',
+                Architecture.x64 => 'x86_64-linux-ohos',
+                _ => throw UnsupportedError('Unsupported HarmonyOS ABI: ${code.targetArchitecture}'),
+              }}',
               '--sysroot=${compiler.resolve('../../sysroot').toFilePath()}',
             ],
             additionalLibraryDirectories: [],
@@ -114,7 +118,9 @@ final code = input.config.code;
     $oldProperties = "path.join(flutterProjectPath, ohosDir, 'local.properties')"
     if (!$originalPlugin.Contains($oldProperties)) { throw 'Flutter Hvigor project layout changed.' }
     $rootPlugin = $originalPlugin.Replace($oldProperties, "path.join(flutterProjectPath, '.flutter-harmony.properties')")
-    $rootPlugin = [regex]::Replace($rootPlugin, 'const DEFAULT_PLATFORMS = \[\s*PLATFORM_ARM64,\s*PLATFORM_X86_64\s*\]', 'const DEFAULT_PLATFORMS = [PLATFORM_ARM64]')
+    $archArgument = 'flutterArgs.push(`-dOhosArchs=${targetPlatforms.join('' '')}`)'
+    if (!$rootPlugin.Contains($archArgument)) { throw 'Flutter Hvigor ABI argument changed.' }
+    $rootPlugin = $rootPlugin.Replace($archArgument, 'flutterArgs.push(`"-dOhosArchs=${targetPlatforms.join('' '')}"`)')
     $rootPlugin = $rootPlugin.Replace('const sdkPath = properties[''flutter.sdk'']', 'const sdkPath = properties[''flutter.sdk'']; process.env.DEVECO_SDK_HOME = properties[''hwsdk.dir'']')
     [IO.File]::WriteAllText($plugin, $rootPlugin)
     $manifest = @{ private = $true; dependencies = @{ 'flutter-hvigor-plugin' = 'file:./build/harmony/toolchain/flutter-hvigor-plugin' } }
@@ -138,6 +144,7 @@ final code = input.config.code;
     foreach ($har in @('flutter_embedding_debug.har','arm64_v8a_debug.har')) {
         Copy-Item -LiteralPath (Join-Path $FlutterRoot "bin/cache/artifacts/engine/ohos-arm64/$har") -Destination $harDir -Force
     }
+    Copy-Item -LiteralPath (Join-Path $FlutterRoot 'bin/cache/artifacts/engine/ohos-x64/x86_64_debug.har') -Destination $harDir -Force
     & $ohpm install --all --registry 'https://ohpm.openharmony.cn/ohpm/' --strict_ssl true
     if ($LASTEXITCODE -ne 0) { throw 'Root OHPM installation failed.' }
     Write-Host "DevEco project: $repo"
@@ -147,12 +154,33 @@ final code = input.config.code;
     if ($LASTEXITCODE -ne 0) { throw 'Flutter OHOS build failed.' }
     $hap = Join-Path $repo 'entry/build/default/outputs/default/entry-default-unsigned.hap'
     if (!(Test-Path -LiteralPath $hap)) { throw 'The unsigned HAP was not found.' }
-    $library = Join-Path $toolchain 'hap-check-libsqlite3.so'
+    $requiredAbis = [ordered]@{ 'arm64-v8a' = 183; 'x86_64' = 62 }
+    $readelf = Join-Path $sdk 'default/openharmony/native/llvm/bin/llvm-readelf.exe'
     $package = [IO.Compression.ZipFile]::OpenRead($hap)
     try {
-        $entry = $package.GetEntry('libs/arm64-v8a/libsqlite3.so')
-        if (!$entry) { throw 'The HAP is missing its ARM64 SQLite code asset.' }
-        [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $library, $true)
+        foreach ($abi in $requiredAbis.Keys) {
+            $names = @('libflutter.so', 'libsqlite3.so')
+            if ($Mode -eq 'release') { $names += 'libapp.so' }
+            foreach ($name in $names) {
+                $entry = $package.GetEntry("libs/$abi/$name")
+                if (!$entry) { throw "Missing HAP library: $abi/$name" }
+                $reader = [IO.BinaryReader]::new($entry.Open())
+                try { $header = $reader.ReadBytes(20) } finally { $reader.Dispose() }
+                if ($header.Length -ne 20 -or [BitConverter]::ToUInt32($header, 0) -ne 0x464c457f -or $header[4] -ne 2 -or
+                    $header[5] -ne 1 -or [BitConverter]::ToUInt16($header, 18) -ne $requiredAbis[$abi]) {
+                    throw "Wrong ELF architecture: $abi/$name"
+                }
+                if ($name -eq 'libsqlite3.so') {
+                    $library = Join-Path $toolchain "hap-check-$abi-libsqlite3.so"
+                    [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $library, $true)
+                    $elf = & $readelf -d -V $library
+                    if ($LASTEXITCODE -ne 0 -or ($elf -join "`n") -match 'libc\.so\.6|GLIBC_') {
+                        throw "The packaged SQLite library is not an OHOS binary: $abi"
+                    }
+                }
+            }
+        }
+        Write-Host 'Verified native libraries for arm64-v8a and x86_64.'
         foreach ($path in @('assets/data/TrafArch_Database_TU.sqlite', 'assets/data/TrafArch_Database_CU.sqlite',
             'assets/data/reference_manifest.json', 'assets/suica/suica_stationcode.db', 'assets/suica/manifest.json')) {
             $entry = $package.GetEntry("resources/rawfile/flutter_assets/$path")
@@ -170,15 +198,15 @@ final code = input.config.code;
     } finally {
         $package.Dispose()
     }
-    $readelf = Join-Path $sdk 'default/openharmony/native/llvm/bin/llvm-readelf.exe'
-    $elf = & $readelf -h -d -V $library
-    if ($LASTEXITCODE -ne 0 -or ($elf -join "`n") -notmatch 'Machine:\s+AArch64' -or
-        ($elf -join "`n") -match 'libc\.so\.6|GLIBC_' ) {
-        throw 'The packaged SQLite library is not an acceptable OHOS ARM64 binary.'
-    }
-    $output = Join-Path $outputDir "TrafArch-ohos-arm64-$Mode-unsigned.hap"
+    $output = Join-Path $outputDir "TrafArch-ohos-arm64-x64-$Mode-unsigned.hap"
     [IO.File]::Copy($hap, $output, $true)
     Write-Host "Unsigned HAP: $output"
+    $signed = Join-Path $repo 'entry/build/default/outputs/default/entry-default-signed.hap'
+    $product = (Get-Content -Raw -LiteralPath (Join-Path $repo 'build-profile.json5') | ConvertFrom-Json).app.products |
+        Where-Object name -eq 'default'
+    if ($product.signingConfig -and (Test-Path -LiteralPath $signed)) {
+        Write-Host "Signed HAP for installation: $signed"
+    }
 
 } finally {
     Pop-Location

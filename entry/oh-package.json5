@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "dependencies": {
     "@ohos/flutter_ohos": "file:./.flutter-engine/flutter_embedding_debug.har",
-    "flutter_native_arm64_v8a": "file:./.flutter-engine/arm64_v8a_debug.har"
+    "flutter_native_arm64_v8a": "file:./.flutter-engine/arm64_v8a_debug.har",
+    "flutter_native_x86_64": "file:./.flutter-engine/x86_64_debug.har"
   }
 }

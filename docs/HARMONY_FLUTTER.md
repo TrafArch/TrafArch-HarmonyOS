@@ -16,7 +16,7 @@
 .\dev\harmony\build_hap.ps1 -FlutterRoot 'D:\usually\flutter-ohos-c5880c6'
 ```
 
-脚本从根目录调用 Hvigor 构建 `entry`，不再复制项目。它把本地构建依赖放在忽略目录，不修改共享 Pub 缓存或依赖锁文件。SQLite 源码固定为 3.54.0 并核对 SHA-256；仅鸿蒙目标用 OHOS NDK 的 ARM64 目标和 sysroot 编译，避免 Flutter 的 Linux 兼容分支选到依赖 GLIBC 的预编译库。通过校验的未签名包位于 `build/harmony/TrafArch-ohos-arm64-debug-unsigned.hap`（`-Mode release` 对应 `release`）。发布和上机需独立处理签名。
+脚本从根目录调用 Hvigor 构建 `entry`，不再复制项目。它把本地构建依赖放在忽略目录，不修改共享 Pub 缓存或依赖锁文件。SQLite 源码固定为 3.54.0 并核对 SHA-256；OHOS NDK 分别生成 `arm64-v8a` 和 `x86_64` 库，避免选到依赖 GLIBC 的 Linux 预编译库。默认 HAP 同时包含两种 ABI，脚本会校验两种架构的 ELF。配置签名后，安装使用 `entry/build/default/outputs/default/entry-default-signed.hap`，不要选旧的 ARM64 单架构包或 `build/harmony/TrafArch-ohos-arm64-x64-debug-unsigned.hap`。
 
 要用 DevEco 的构建按钮，先将上面的构建命令加上 `-PrepareOnly`，然后用 **File → Open** 打开仓库根目录。此后可以在同一目录运行 `ohpm install --all`，在 DevEco 选择 `entry` 构建。若手动运行 `flutter pub get` 刷新了包配置，再运行一次 `-PrepareOnly` 恢复 OHOS SQLite 构建配置。
 
