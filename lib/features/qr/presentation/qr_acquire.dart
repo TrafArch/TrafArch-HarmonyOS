@@ -20,9 +20,10 @@ Future<void> scanQrAndParse(BuildContext context, AppDependencies app) async {
 
 Future<void> importQrFromGalleryAndParse(
   BuildContext context,
-  AppDependencies app,
-) async {
-  final result = await const QrAcquisition().gallery();
+  AppDependencies app, {
+  QrAcquisition acquisition = const QrAcquisition(),
+}) async {
+  final result = await acquisition.gallery();
   if (context.mounted) _present(context, app, result);
 }
 

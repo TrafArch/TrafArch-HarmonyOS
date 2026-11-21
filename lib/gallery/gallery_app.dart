@@ -57,6 +57,7 @@ class GalleryApp extends StatefulWidget {
     this.onDisableBeta,
     this.openWebLink,
     this.openEmail,
+    this.liveQrPageBuilder,
     this.preferences,
     this.loadKnowledgeIndex = GalleryKnowledgeIndex.load,
   });
@@ -64,6 +65,7 @@ class GalleryApp extends StatefulWidget {
   final VoidCallback? onDisableBeta;
   final Future<void> Function(Uri)? openWebLink;
   final Future<bool> Function(String)? openEmail;
+  final WidgetBuilder? liveQrPageBuilder;
   final GalleryPreferences? preferences;
   final Future<GalleryKnowledgeIndex> Function() loadKnowledgeIndex;
 
@@ -72,7 +74,7 @@ class GalleryApp extends StatefulWidget {
 }
 
 class _GalleryAppState extends State<GalleryApp> {
-  late final Future<GalleryController> _ready;
+  late final Future<GalleryController>? _ready;
   GalleryController? _owned;
   late final GalleryPreferences _preferences;
   final _appearance = _GalleryAppearance();
@@ -92,7 +94,7 @@ class _GalleryAppState extends State<GalleryApp> {
     super.initState();
     _preferences = widget.preferences ?? GalleryPreferences();
     _ready = widget.controller != null
-        ? Future.value(widget.controller!)
+        ? null
         : GalleryData.load().then((data) {
             final controller = GalleryController(data);
             if (!mounted) {
@@ -114,10 +116,12 @@ class _GalleryAppState extends State<GalleryApp> {
   @override
   Widget build(BuildContext context) => FutureBuilder<GalleryController>(
     future: _ready,
+    initialData: widget.controller,
     builder: (context, snapshot) {
       final c = snapshot.data;
       if (c == null) {
         return MaterialApp(
+          debugShowCheckedModeBanner: false,
           home: Scaffold(
             body: Center(
               child: snapshot.hasError
@@ -182,6 +186,7 @@ class _GalleryAppState extends State<GalleryApp> {
               onDisableBeta: widget.onDisableBeta,
               openWebLink: widget.openWebLink,
               openEmail: widget.openEmail,
+              liveQrPageBuilder: widget.liveQrPageBuilder,
             ),
           );
         },

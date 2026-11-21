@@ -1,19 +1,44 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:transit_card_analyzer/app/app_dependencies.dart';
 import 'package:transit_card_analyzer/app/harmony_app.dart';
 import 'package:transit_card_analyzer/app/harmony_gallery_controller.dart';
+import 'package:transit_card_analyzer/features/qr/data/harmony_qr_scanner.dart';
+import 'package:transit_card_analyzer/features/qr/presentation/qr_page.dart';
+import 'package:transit_card_analyzer/features/qr/presentation/qr_scan_page.dart';
 import 'package:transit_card_analyzer/gallery/gallery_app.dart';
 import 'package:transit_card_analyzer/gallery/gallery_controller.dart';
 import 'package:transit_card_analyzer/platform/nfc/nfc_models.dart';
 import 'package:transit_card_analyzer/platform/nfc/nfc_service.dart';
+import 'package:transit_card_analyzer/platform/qr/qr_image_picker.dart';
 import 'package:transit_card_analyzer/platform/storage/settings_store.dart';
 
 import 'support/test_database.dart';
 
 void main() {
+  testWidgets('已有鸿蒙控制器时首帧直达首页，不闪过 DEBUG 加载页', (tester) async {
+    final app = AppDependencies(
+      settingsStore: MemorySettingsStore(),
+      bundle: MissingTestAssets(),
+      database: testDatabase(),
+      channel: _TagChannel(),
+    );
+    final controller = HarmonyGalleryController(app);
+    addTearDown(app.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(GalleryApp(controller: controller));
+
+    expect(find.text('开始读取'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    final material = tester.widget<MaterialApp>(find.byType(MaterialApp));
+    expect(material.debugShowCheckedModeBanner, isFalse);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('鸿蒙同意后直达原版 2.x，不加载样例，也不自动读卡', (tester) async {
     final channel = _TagChannel();
     final database = testDatabase();
@@ -40,6 +65,81 @@ void main() {
     expect(find.text('开始读取'), findsOneWidget);
     expect(find.text('模拟数据'), findsNothing);
     expect(channel.starts, isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('旧的系统扫码偏好不再生效，应用内相机和相册仍可用', (tester) async {
+    final previous = MobileScannerPlatform.instance;
+    MobileScannerPlatform.instance = HarmonyQrScanner();
+    addTearDown(() => MobileScannerPlatform.instance = previous);
+    final messenger = tester.binding.defaultBinaryMessenger;
+    var starts = 0;
+    var picks = 0;
+    messenger.setMockMethodCallHandler(HarmonyQrScanner.channel, (call) async {
+      if (call.method == 'stop') return null;
+      expect(call.method, 'start');
+      starts++;
+      throw PlatformException(
+        code: 'permission_denied',
+        message: '请在系统设置中允许 TrafArch 使用相机',
+      );
+    });
+    messenger.setMockMethodCallHandler(qrImagePickerChannel, (call) async {
+      expect(call.method, 'pickImage');
+      picks++;
+      return null;
+    });
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(HarmonyQrScanner.channel, null);
+      messenger.setMockMethodCallHandler(qrImagePickerChannel, null);
+    });
+    await tester.pumpWidget(
+      HarmonyApp(
+        settingsStore: MemorySettingsStore({'scan_kit_enabled': 'true'}),
+        createDependencies: (store) => AppDependencies(
+          settingsStore: store,
+          bundle: MissingTestAssets(),
+          database: testDatabase(),
+          channel: _TagChannel(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('同意并继续'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('设置'));
+    await tester.pumpAndSettle();
+    expect(find.text('读取后自动保存'), findsOneWidget);
+    expect(find.textContaining('系统扫码'), findsNothing);
+    await tester.tap(find.byTooltip('返回'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('扫码'));
+    await tester.pumpAndSettle();
+    expect(find.byType(QrPage), findsOneWidget);
+    expect(find.textContaining('内置二维码样例'), findsNothing);
+    await tester.tap(find.text('扫描二维码'));
+    await tester.pumpAndSettle();
+    expect(find.byType(QrScanPage), findsOneWidget);
+    expect(find.textContaining('请在系统设置中允许 TrafArch 使用相机'), findsOneWidget);
+    expect(starts, 1);
+    await tester.tap(find.text('重试相机'));
+    await tester.pumpAndSettle();
+    expect(starts, 2);
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('从相册导入'));
+    await tester.pumpAndSettle();
+    expect(picks, 1);
+    expect(find.textContaining('尚未获取二维码'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, '扫描二维码'))
+          .onPressed,
+      isNotNull,
+    );
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    expect(find.text('开始读取'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

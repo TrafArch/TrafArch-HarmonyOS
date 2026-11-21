@@ -92,7 +92,7 @@ extension _GalleryComponents on _GalleryViewState {
       _ => '足迹',
     };
     final extra = switch (page) {
-      GalleryPage.home when !c.isLive => _icon(
+      GalleryPage.home => _icon(
         Icons.qr_code_scanner_rounded,
         '扫码',
         () => c.navigate(GalleryPage.qr),

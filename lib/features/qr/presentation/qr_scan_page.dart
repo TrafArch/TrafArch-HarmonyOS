@@ -48,18 +48,19 @@ class _QrScanPageState extends State<QrScanPage> with WidgetsBindingObserver {
     _syncCamera();
   }
 
-  void _syncCamera() {
+  void _syncCamera({bool restart = false}) {
     // Serialize stop/start when focus changes rapidly during fold or multiwindow.
     _cameraWork = _cameraWork.then((_) async {
       if (!mounted || _handled || !_controller.value.isInitialized) return;
       try {
-        if (_cameraWanted) {
+        if (_cameraWanted && (_cameraError == null || restart)) {
+          if (restart) await _controller.stop();
           await _controller.start();
+          if (mounted && _cameraError != null) {
+            setState(() => _cameraError = null);
+          }
         } else {
           await _controller.stop();
-        }
-        if (mounted && _cameraError != null) {
-          setState(() => _cameraError = null);
         }
       } on Object catch (error) {
         // A lost camera may fail stop as well as start. Keep the operation queue
@@ -84,6 +85,23 @@ class _QrScanPageState extends State<QrScanPage> with WidgetsBindingObserver {
     }
   }
 
+  void _onDetectError(Object error, StackTrace stackTrace) {
+    if (!mounted || _handled || !_cameraWanted) return;
+    setState(() => _cameraError = error);
+    _syncCamera();
+  }
+
+  Future<void> _toggleTorch() async {
+    try {
+      await _controller.toggleTorch();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('无法切换闪光灯')));
+      }
+    }
+  }
+
   /// 统一返回解码字节，仅生效一次。
   void _finishWithPayload(List<int> payload) {
     if (_handled || !mounted || payload.isEmpty) return;
@@ -103,10 +121,22 @@ class _QrScanPageState extends State<QrScanPage> with WidgetsBindingObserver {
             backgroundColor: Colors.black,
             foregroundColor: Colors.white,
             actions: [
-              IconButton(
-                tooltip: '闪光灯',
-                onPressed: () => _controller.toggleTorch(),
-                icon: const Icon(Icons.flashlight_on_outlined),
+              ValueListenableBuilder(
+                valueListenable: _controller,
+                builder: (context, camera, _) => IconButton(
+                  tooltip: '闪光灯',
+                  onPressed:
+                      camera.isRunning &&
+                          (camera.torchState == TorchState.on ||
+                              camera.torchState == TorchState.off)
+                      ? _toggleTorch
+                      : null,
+                  icon: Icon(
+                    camera.torchState == TorchState.on
+                        ? Icons.flashlight_off_outlined
+                        : Icons.flashlight_on_outlined,
+                  ),
+                ),
               ),
             ],
           ),
@@ -118,15 +148,21 @@ class _QrScanPageState extends State<QrScanPage> with WidgetsBindingObserver {
                 MobileScanner(
                   controller: _controller,
                   onDetect: _onDetect,
-                  errorBuilder: (context, error) =>
-                      _ScanErrorView(error: error, onRetry: _syncCamera),
+                  onDetectError: _onDetectError,
+                  errorBuilder: (context, error) => _ScanErrorView(
+                    error: error,
+                    onRetry: () => _syncCamera(restart: true),
+                  ),
                   overlayBuilder: (context, constraints) =>
                       const _ScanOverlay(),
                 ),
                 if (_cameraError case final error?)
                   ColoredBox(
                     color: Colors.black,
-                    child: _ScanErrorView(error: error, onRetry: _syncCamera),
+                    child: _ScanErrorView(
+                      error: error,
+                      onRetry: () => _syncCamera(restart: true),
+                    ),
                   ),
                 const Positioned(
                   left: 24,
@@ -182,6 +218,11 @@ class _ScanErrorView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final detail = switch (error) {
+      MobileScannerException(:final errorDetails) => errorDetails?.message,
+      MobileScannerBarcodeException(:final message) => message,
+      _ => null,
+    };
     return Center(
       child: SingleChildScrollView(
         child: Padding(
@@ -196,7 +237,7 @@ class _ScanErrorView extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               Text(
-                '相机不可用：$error',
+                detail == null ? '相机不可用' : '相机不可用：$detail',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),

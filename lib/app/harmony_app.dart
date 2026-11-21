@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
+import '../features/qr/application/qr_acquisition.dart';
+import '../features/qr/presentation/qr_page.dart';
 import '../gallery/gallery_app.dart';
 import '../gallery/gallery_consent_screen.dart';
 import '../gallery/gallery_preferences.dart';
@@ -88,5 +90,9 @@ class _HarmonyGalleryState extends State<_HarmonyGallery>
     controller: _controller,
     preferences: _preferences,
     openWebLink: const MethodChannelFeedbackBrowser().open,
+    liveQrPageBuilder: (_) => QrPage(
+      app: _app,
+      acquisition: const QrAcquisition(useDartGallery: true),
+    ),
   );
 }

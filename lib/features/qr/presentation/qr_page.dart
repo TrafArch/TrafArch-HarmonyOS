@@ -3,14 +3,20 @@ import 'package:flutter/material.dart';
 import '../../../shared/presentation/adaptive_layout.dart';
 
 import '../../../app/app_dependencies.dart';
+import '../application/qr_acquisition.dart';
 import 'jt_t1179_qr_display.dart';
 import 'qr_acquire.dart';
 import 'qr_inspection_panel.dart';
 
 class QrPage extends StatefulWidget {
-  const QrPage({super.key, required this.app});
+  const QrPage({
+    super.key,
+    required this.app,
+    this.acquisition = const QrAcquisition(),
+  });
 
   final AppDependencies app;
+  final QrAcquisition acquisition;
 
   @override
   State<QrPage> createState() => _QrPageState();
@@ -24,7 +30,11 @@ class _QrPageState extends State<QrPage> {
     setState(() => _busy = true);
     try {
       if (gallery) {
-        await importQrFromGalleryAndParse(context, widget.app);
+        await importQrFromGalleryAndParse(
+          context,
+          widget.app,
+          acquisition: widget.acquisition,
+        );
       } else {
         await scanQrAndParse(context, widget.app);
       }

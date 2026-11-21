@@ -6,7 +6,7 @@ import 'dart:ui' as ui;
 
 import 'package:zxing2/qrcode.dart';
 
-/// MLKit 无法识别或不可用时，相册导入使用的纯 Dart 本地解码结果。
+/// 纯 Dart 本地二维码解码结果。
 class QrDartDecode {
   const QrDartDecode(this.payload);
 
@@ -32,7 +32,21 @@ QrDartDecode? decodeQrFromRgba(Uint8List rgba, int width, int height) {
           (rgba[offset + 1] << 8) |
           rgba[offset + 2];
     }
-    final source = RGBLuminanceSource(width, height, pixels);
+    return _decode(RGBLuminanceSource(width, height, pixels));
+  } catch (_) {
+    return null;
+  }
+}
+
+QrDartDecode? decodeQrFromLuminance(Uint8List pixels, int width, int height) {
+  if (width <= 0 || height <= 0 || pixels.length != width * height) return null;
+  return _decode(
+    _CameraLuminanceSource(Int8List.sublistView(pixels), width, height),
+  );
+}
+
+QrDartDecode? _decode(LuminanceSource source) {
+  try {
     final result = _tryDecode(source) ?? _tryDecode(source.invert());
     if (result == null) return null;
 
@@ -50,6 +64,24 @@ QrDartDecode? decodeQrFromRgba(Uint8List rgba, int width, int height) {
     return QrDartDecode(utf8.encode(text));
   } catch (_) {
     return null;
+  }
+}
+
+class _CameraLuminanceSource extends LuminanceSource {
+  _CameraLuminanceSource(this._pixels, super.width, super.height);
+
+  final Int8List _pixels;
+
+  @override
+  Int8List getMatrix() => _pixels;
+
+  @override
+  Int8List getRow(int row, Int8List? buffer) {
+    RangeError.checkValueInInterval(row, 0, height - 1, 'row');
+    final bytes = buffer != null && buffer.length >= width
+        ? buffer
+        : Int8List(width);
+    return bytes..setRange(0, width, _pixels, row * width);
   }
 }
 
@@ -81,8 +113,8 @@ Future<List<int>?> decodeQrFromImageFile(String path) async {
     final longest = targetWidth > targetHeight ? targetWidth : targetHeight;
     if (longest > maxSide) {
       final scale = maxSide / longest;
-      targetWidth = (targetWidth * scale).round();
-      targetHeight = (targetHeight * scale).round();
+      targetWidth = (targetWidth * scale).round().clamp(1, maxSide);
+      targetHeight = (targetHeight * scale).round().clamp(1, maxSide);
     }
 
     codec = await descriptor.instantiateCodec(
