@@ -57,7 +57,7 @@ class GalleryApp extends StatefulWidget {
     this.onDisableBeta,
     this.openWebLink,
     this.openEmail,
-    this.liveQrPageBuilder,
+    this.livePageBuilders = const {},
     this.preferences,
     this.loadKnowledgeIndex = GalleryKnowledgeIndex.load,
   });
@@ -65,7 +65,7 @@ class GalleryApp extends StatefulWidget {
   final VoidCallback? onDisableBeta;
   final Future<void> Function(Uri)? openWebLink;
   final Future<bool> Function(String)? openEmail;
-  final WidgetBuilder? liveQrPageBuilder;
+  final Map<GalleryPage, WidgetBuilder> livePageBuilders;
   final GalleryPreferences? preferences;
   final Future<GalleryKnowledgeIndex> Function() loadKnowledgeIndex;
 
@@ -186,7 +186,7 @@ class _GalleryAppState extends State<GalleryApp> {
               onDisableBeta: widget.onDisableBeta,
               openWebLink: widget.openWebLink,
               openEmail: widget.openEmail,
-              liveQrPageBuilder: widget.liveQrPageBuilder,
+              livePageBuilders: widget.livePageBuilders,
             ),
           );
         },
@@ -227,6 +227,7 @@ class _GalleryView extends StatefulWidget {
     required this.preferences,
     required this.anchors,
     required this.loadKnowledge,
+    required this.hasLiveKnowledgePage,
     this.visible = true,
     this.onDisableBeta,
     this.openWebLink,
@@ -237,6 +238,7 @@ class _GalleryView extends StatefulWidget {
   final GalleryPreferences preferences;
   final _GalleryAnchorRegistry anchors;
   final Future<GalleryKnowledgeIndex> Function() loadKnowledge;
+  final bool hasLiveKnowledgePage;
   final bool visible;
   final VoidCallback? onDisableBeta;
   final Future<void> Function(Uri)? openWebLink;

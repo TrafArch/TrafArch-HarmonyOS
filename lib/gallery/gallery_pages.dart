@@ -1140,11 +1140,15 @@ extension _GalleryPages on _GalleryViewState {
               subtitle:
                   '总余额${c.includeOverdraft ? '包含' : '扣除'}固定 8 元额度，CU 余额不重复扣除',
             ),
+          ],
+          if (!c.isLive || widget.hasLiveKnowledgePage) ...[
             const Divider(),
             _settingRow(
               '知识库',
               () => c.navigate(GalleryPage.knowledge),
-              subtitle: 'TU 41 个地区 / CU 7 个地区',
+              subtitle: c.isLive
+                  ? '查看本地交通联合与城市一卡通参考数据'
+                  : 'TU 41 个地区 / CU 7 个地区',
               icon: Icons.menu_book_outlined,
             ),
           ],

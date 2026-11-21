@@ -5,13 +5,26 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "C:\\Users\\kajolno\\.ohos\\config\\default_TrafArch-Harmony_qouuJxlDAK6xmuCss7oeu02WnNVHRCdLyM72os2d1_A=.cer",
+          "certpath": "C:/Users/kajolno/.ohos/config/default_TrafArch-Harmony_qouuJxlDAK6xmuCss7oeu02WnNVHRCdLyM72os2d1_A=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001BB105F6CA0ED06419C8D82C1CD5C3D7F4468C95C740AA19C1579992F2FA02A17DFD4A0BCE431C0A",
-          "profile": "C:\\Users\\kajolno\\.ohos\\config\\default_TrafArch-Harmony_qouuJxlDAK6xmuCss7oeu02WnNVHRCdLyM72os2d1_A=.p7b",
+          "keyPassword": "0000001BEF50970B999CE0E3FC7B255839733B7323ADB30E532DC24D983AA1DB39E9ACC80285A1304BE8D6",
+          "profile": "C:/Users/kajolno/.ohos/config/default_TrafArch-Harmony_qouuJxlDAK6xmuCss7oeu02WnNVHRCdLyM72os2d1_A=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "C:\\Users\\kajolno\\.ohos\\config\\default_TrafArch-Harmony_qouuJxlDAK6xmuCss7oeu02WnNVHRCdLyM72os2d1_A=.p12",
-          "storePassword": "0000001B522DCA7E3DC419E7381D7A7BA664449547E2D88041522EC1AB7B21165CEE94D3B249CF1FD8DCC4"
+          "storeFile": "C:/Users/kajolno/.ohos/config/default_TrafArch-Harmony_qouuJxlDAK6xmuCss7oeu02WnNVHRCdLyM72os2d1_A=.p12",
+          "storePassword": "0000001B3FBF97595CFAB3223311DB6DE261E9228E6FEC33327ABC29F0248CADC0298290631CF0AF99A511"
+        }
+      },
+      {
+        "name": "trafarch",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "D:/iteam/TrafArch-Harmony/build/harmony/TrafArch-appgallery-release.cer",
+          "keyAlias": "kajolno",
+          "keyPassword": "00000020799CA46B10D4882404A4E8A9B5C4B289D174C9CF7CD992850B8EA084A55754F1DF4738AC11D8A89C9E126166",
+          "profile": "D:/iteam/TrafArch-Harmony/TrafArch_发布Release.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "D:/iteam/TrafArch-Harmony/TrafArch.p12",
+          "storePassword": "000000208FCE1D8AF4EEE7BBD433645A23B1B2538387F25287BDCB8101C3E65CB1ED443E7E4B79073085A228BA7A7B42"
         }
       }
     ],

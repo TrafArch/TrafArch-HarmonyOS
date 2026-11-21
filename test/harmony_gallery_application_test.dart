@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import 'package:transit_card_analyzer/app/harmony_gallery_controller.dart';
 import 'package:transit_card_analyzer/features/qr/data/harmony_qr_scanner.dart';
 import 'package:transit_card_analyzer/features/qr/presentation/qr_page.dart';
 import 'package:transit_card_analyzer/features/qr/presentation/qr_scan_page.dart';
+import 'package:transit_card_analyzer/features/reference_data/presentation/knowledge_base_page.dart';
 import 'package:transit_card_analyzer/gallery/gallery_app.dart';
 import 'package:transit_card_analyzer/gallery/gallery_controller.dart';
 import 'package:transit_card_analyzer/platform/nfc/nfc_models.dart';
@@ -65,6 +67,57 @@ void main() {
     expect(find.text('开始读取'), findsOneWidget);
     expect(find.text('模拟数据'), findsNothing);
     expect(channel.starts, isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('鸿蒙设置打开真实知识库，显示本地 TU 和 CU 参考数据', (tester) async {
+    const paths = MethodChannel('plugins.flutter.io/path_provider');
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final directory = Directory.systemTemp.createTempSync(
+      'trafarch-knowledge-',
+    );
+    messenger.setMockMethodCallHandler(paths, (call) async => directory.path);
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(paths, null);
+      directory.deleteSync(recursive: true);
+    });
+    final store = MemorySettingsStore({SettingsKeys.legalConsent: 'true'});
+    final app = AppDependencies(
+      settingsStore: store,
+      database: testDatabase(),
+      channel: _TagChannel(),
+    );
+    addTearDown(() {
+      if (!app.disposed) app.dispose();
+    });
+    await tester.runAsync(app.init);
+    expect(app.knowledgeBase?.packageVersions.keys, containsAll(['TU', 'CU']));
+    expect(
+      app.knowledgeBase?.coverageDatasets.map((dataset) => dataset.system),
+      containsAll(['tu', 'cu']),
+    );
+
+    await tester.pumpWidget(
+      HarmonyApp(settingsStore: store, createDependencies: (_) => app),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('设置'));
+    await tester.pumpAndSettle();
+    expect(find.text('TU 41 个地区 / CU 7 个地区'), findsNothing);
+    await tester.tap(find.text('知识库'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<KnowledgeBasePage>(find.byType(KnowledgeBasePage)).app,
+      same(app),
+    );
+    expect(find.text('数据概况'), findsOneWidget);
+    expect(find.text('交通联合 TU'), findsOneWidget);
+    await tester.tap(find.text('城市一卡通 CU'));
+    await tester.pumpAndSettle();
+    expect(find.text('城市一卡通暂无站点覆盖数据'), findsNothing);
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    expect(find.text('读取后自动保存'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

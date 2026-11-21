@@ -116,10 +116,10 @@ class _GalleryNavigator extends StatefulWidget {
     required this.controller,
     required this.preferences,
     required this.loadKnowledge,
+    required this.livePageBuilders,
     this.onDisableBeta,
     this.openWebLink,
     this.openEmail,
-    this.liveQrPageBuilder,
   });
   final GalleryController controller;
   final GalleryPreferences preferences;
@@ -127,7 +127,7 @@ class _GalleryNavigator extends StatefulWidget {
   final VoidCallback? onDisableBeta;
   final Future<void> Function(Uri)? openWebLink;
   final Future<bool> Function(String)? openEmail;
-  final WidgetBuilder? liveQrPageBuilder;
+  final Map<GalleryPage, WidgetBuilder> livePageBuilders;
 
   @override
   State<_GalleryNavigator> createState() => _GalleryNavigatorState();
@@ -239,6 +239,11 @@ class _GalleryNavigatorState extends State<_GalleryNavigator>
     return index >= lastOpaque;
   }
 
+  WidgetBuilder? _livePageBuilder(GalleryRouteEntry entry) =>
+      widget.controller.isLive && entry.kind == GalleryRouteKind.page
+      ? widget.livePageBuilders[entry.page]
+      : null;
+
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: Listenable.merge([widget.controller, widget.preferences]),
@@ -272,30 +277,31 @@ class _GalleryNavigatorState extends State<_GalleryNavigator>
                 reduceMotion: _reduceMotion,
                 onCreated: (route) => _routes[entry.id] = route,
                 onDisposed: () => _routes.remove(entry.id),
-                child:
-                    entry.page == GalleryPage.qr &&
-                        entry.kind == GalleryRouteKind.page &&
-                        widget.liveQrPageBuilder != null
-                    ? Builder(builder: widget.liveQrPageBuilder!)
-                    : AnimatedBuilder(
-                        animation: Listenable.merge([
-                          widget.controller,
-                          widget.preferences,
-                          if (entry.overlay != null) _anchors,
-                        ]),
-                        builder: (context, _) => _GalleryView(
-                          key: ValueKey('route-${entry.id}'),
-                          entry: entry,
-                          controller: widget.controller,
-                          preferences: widget.preferences,
-                          loadKnowledge: widget.loadKnowledge,
-                          anchors: _anchors,
-                          visible: _isVisible(entry),
-                          onDisableBeta: widget.onDisableBeta,
-                          openWebLink: widget.openWebLink,
-                          openEmail: widget.openEmail,
-                        ),
+                child: switch (_livePageBuilder(entry)) {
+                  final builder? => Builder(builder: builder),
+                  null => AnimatedBuilder(
+                    animation: Listenable.merge([
+                      widget.controller,
+                      widget.preferences,
+                      if (entry.overlay != null) _anchors,
+                    ]),
+                    builder: (context, _) => _GalleryView(
+                      key: ValueKey('route-${entry.id}'),
+                      entry: entry,
+                      controller: widget.controller,
+                      preferences: widget.preferences,
+                      loadKnowledge: widget.loadKnowledge,
+                      hasLiveKnowledgePage: widget.livePageBuilders.containsKey(
+                        GalleryPage.knowledge,
                       ),
+                      anchors: _anchors,
+                      visible: _isVisible(entry),
+                      onDisableBeta: widget.onDisableBeta,
+                      openWebLink: widget.openWebLink,
+                      openEmail: widget.openEmail,
+                    ),
+                  ),
+                },
               ),
           ],
         ),
