@@ -44,6 +44,19 @@ enum GalleryOverlay {
   licenseDetail,
 }
 
+extension GalleryOverlaySurface on GalleryOverlay {
+  bool get isBottomSheet => switch (this) {
+    GalleryOverlay.face ||
+    GalleryOverlay.trip ||
+    GalleryOverlay.export ||
+    GalleryOverlay.importPreview ||
+    GalleryOverlay.rawFeedback ||
+    GalleryOverlay.contributors ||
+    GalleryOverlay.licenseDetail => true,
+    _ => false,
+  };
+}
+
 enum GalleryReadState { unread, reading, success, failed }
 
 enum GalleryRouteKind { main, page, qrAcquisition, overlay }
@@ -575,6 +588,9 @@ class GalleryController extends ChangeNotifier {
       current.saved = true;
     }
   }, '修改自动保存');
+
+  void setIncludeOverdraft(bool value) =>
+      update(() => includeOverdraft = value, '修改上海透支显示');
 
   void setLogs(bool value) {
     if (value) {

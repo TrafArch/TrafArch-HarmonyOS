@@ -67,7 +67,7 @@ class GalleryKnowledgeIndex {
   GalleryKnowledgeIndex._(
     Iterable<GalleryKnowledgeCity> cities,
     Iterable<GalleryKnowledgeResult> codes,
-  ) {
+  ) : cities = List.unmodifiable(cities) {
     for (final city in cities) {
       _add(GalleryKnowledgeResult(GalleryKnowledgeKind.city, city), [
         city.code,
@@ -96,6 +96,7 @@ class GalleryKnowledgeIndex {
     }
   }
 
+  final List<GalleryKnowledgeCity> cities;
   final _postings = <int, List<_SearchTerm>>{};
 
   static Future<GalleryKnowledgeIndex> load() async {

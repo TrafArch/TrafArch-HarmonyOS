@@ -11,7 +11,6 @@ import 'package:transit_card_analyzer/app/harmony_gallery_controller.dart';
 import 'package:transit_card_analyzer/features/qr/data/harmony_qr_scanner.dart';
 import 'package:transit_card_analyzer/features/qr/presentation/qr_page.dart';
 import 'package:transit_card_analyzer/features/qr/presentation/qr_scan_page.dart';
-import 'package:transit_card_analyzer/features/reference_data/presentation/knowledge_base_page.dart';
 import 'package:transit_card_analyzer/gallery/gallery_app.dart';
 import 'package:transit_card_analyzer/gallery/gallery_controller.dart';
 import 'package:transit_card_analyzer/platform/nfc/nfc_models.dart';
@@ -20,6 +19,7 @@ import 'package:transit_card_analyzer/platform/qr/qr_image_picker.dart';
 import 'package:transit_card_analyzer/platform/storage/settings_store.dart';
 
 import 'support/test_database.dart';
+import 'support/gallery_scroll.dart';
 
 void main() {
   testWidgets('已有鸿蒙控制器时首帧直达首页，不闪过 DEBUG 加载页', (tester) async {
@@ -70,6 +70,56 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('鸿蒙专家页使用安卓 2.x 的读取信息结构', (tester) async {
+    final channel = _TagChannel();
+    final app = AppDependencies(
+      settingsStore: MemorySettingsStore(),
+      bundle: MissingTestAssets(),
+      database: testDatabase(),
+      channel: channel,
+    );
+    await tester.runAsync(app.init);
+    final controller = HarmonyGalleryController(app)..initialize();
+    addTearDown(app.dispose);
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(GalleryApp(controller: controller));
+    await tester.runAsync(() async {
+      controller.read();
+      await channel.waitForStart();
+      channel.deliver(channel.starts.single);
+      for (var attempt = 0; attempt < 100 && !controller.hasRead; attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 2));
+      }
+    });
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(controller.hasRead, isTrue);
+
+    await tester.tap(find.byKey(const ValueKey('nav-expert')));
+    await tester.pumpAndSettle();
+    expect(find.text('信息获取'), findsOneWidget);
+    expect(find.text('交通数据解析'), findsOneWidget);
+    expect(find.text('APDU / Raw Data'), findsOneWidget);
+    expect(find.text('JT/T 978 符合性'), findsNothing);
+    expect(find.text('卡片识别'), findsOneWidget);
+    expect(find.text('识别状态'), findsOneWidget);
+    expect(find.text('NFC-F 系统码'), findsNothing);
+
+    await tester.tap(find.text('交通数据解析'));
+    await tester.pumpAndSettle();
+    expect(find.text('交通应用信息'), findsOneWidget);
+    expect(find.text('余额语义'), findsOneWidget);
+    expect(find.text('剩余有效天数'), findsOneWidget);
+
+    await tester.tap(find.text('APDU / Raw Data'));
+    await tester.pumpAndSettle();
+    expect(find.text('APDU 命令 / 响应（0 项）'), findsOneWidget);
+    expect(find.text('0x1A / 0x1E 原始记录（0 条）'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('鸿蒙设置打开真实知识库，显示本地 TU 和 CU 参考数据', (tester) async {
     const paths = MethodChannel('plugins.flutter.io/path_provider');
     final messenger = tester.binding.defaultBinaryMessenger;
@@ -104,20 +154,63 @@ void main() {
     await tester.tap(find.byTooltip('设置'));
     await tester.pumpAndSettle();
     expect(find.text('TU 41 个地区 / CU 7 个地区'), findsNothing);
+    expect(find.text('已存在的记录'), findsOneWidget);
+    expect(find.text('上海交通卡可透支余额'), findsOneWidget);
+    expect(find.text('导出卡片记录'), findsOneWidget);
+    expect(find.text('导入卡片记录'), findsOneWidget);
+
+    await tester.tap(find.text('已存在的记录'));
+    await tester.pumpAndSettle();
+    expect(find.text('跳过'), findsOneWidget);
+    expect(find.text('覆盖'), findsOneWidget);
+    expect(find.text('每次询问'), findsOneWidget);
+    await tester.tap(find.text('跳过'));
+    await tester.pumpAndSettle();
+    expect(app.archiveConflictPolicy.name, 'skip');
+
+    await tester.tap(find.text('上海交通卡可透支余额'));
+    await tester.pumpAndSettle();
+    expect(app.includeShanghaiOverdraft, isTrue);
+
     await tester.tap(find.text('知识库'));
+    await tester.pump();
+    for (var attempt = 0; attempt < 200; attempt++) {
+      if (find
+              .byKey(const ValueKey('knowledge-search-entry'))
+              .evaluate()
+              .isNotEmpty ||
+          find.text('本地参考数据暂不可用').evaluate().isNotEmpty) {
+        break;
+      }
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
+      );
+      await tester.pump();
+    }
     await tester.pumpAndSettle();
     expect(
-      tester.widget<KnowledgeBasePage>(find.byType(KnowledgeBasePage)).app,
-      same(app),
+      find.byKey(const ValueKey('knowledge-search-entry')),
+      findsOneWidget,
     );
     expect(find.text('数据概况'), findsOneWidget);
     expect(find.text('交通联合 TU'), findsOneWidget);
     await tester.tap(find.text('城市一卡通 CU'));
     await tester.pumpAndSettle();
-    expect(find.text('城市一卡通暂无站点覆盖数据'), findsNothing);
-    await tester.tap(find.byType(BackButton));
+    expect(find.text('城市一卡通参考数据'), findsOneWidget);
+    await tester.tap(find.byTooltip('返回'));
     await tester.pumpAndSettle();
     expect(find.text('读取后自动保存'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('记录运行日志'),
+      250,
+      scrollable: galleryVerticalScroll(),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('诊断日志'), findsOneWidget);
+    await tester.tap(find.text('记录运行日志'));
+    await tester.pumpAndSettle();
+    expect(app.loggingEnabled, isTrue);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

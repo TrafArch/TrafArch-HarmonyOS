@@ -27,7 +27,9 @@ class HarmonyGalleryController extends GalleryController {
           'sources': ['全部来源', '交易明细 0x18'],
           'modes': ['全部方式', '轨道交通', '公交', '其他'],
         }),
-      );
+      ) {
+    app.addListener(_appChanged);
+  }
 
   final AppDependencies app;
   GalleryCard _current;
@@ -43,6 +45,10 @@ class HarmonyGalleryController extends GalleryController {
   bool _closed = false;
   bool _saving = false;
   Future<void>? _closing;
+
+  void _appChanged() {
+    if (!_closed) notifyListeners();
+  }
 
   @override
   bool get isLive => true;
@@ -286,10 +292,58 @@ class HarmonyGalleryController extends GalleryController {
   }
 
   @override
+  void setIncludeOverdraft(bool value) {
+    unawaited(_setIncludeOverdraft(value));
+  }
+
+  Future<void> _setIncludeOverdraft(bool value) async {
+    try {
+      await app.setIncludeShanghaiOverdraft(value);
+      if (_closed) return;
+      final verified = app.currentOctopusResult;
+      final capture = app.lastCapture;
+      update(() {
+        includeOverdraft = app.includeShanghaiOverdraft;
+        if (_tag != null) {
+          final amount =
+              verified?.balanceMinor ??
+              app.balanceDisplay.balanceFen(capture?.balanceFen);
+          final currency = verified != null ? 'HKD' : capture?.currencyCode;
+          if (amount != null) {
+            _current.rawBalance = _balanceText(amount, currency);
+          }
+        }
+        _updateArchive();
+      });
+    } catch (_) {
+      if (_closed) return;
+      _archiveNotice = '无法保存上海透支偏好';
+      notifyListeners();
+    }
+  }
+
+  @override
+  void setLogs(bool value) {
+    unawaited(_setLogs(value));
+  }
+
+  Future<void> _setLogs(bool value) async {
+    try {
+      await app.setLoggingEnabled(value);
+      if (!_closed) notifyListeners();
+    } catch (_) {
+      if (_closed) return;
+      _archiveNotice = '无法保存运行日志偏好';
+      notifyListeners();
+    }
+  }
+
+  @override
   void dispose() {
-    super.dispose();
     _closed = true;
+    app.removeListener(_appChanged);
     unawaited(_archiveStream?.cancel());
+    super.dispose();
   }
 
   static List<GalleryRecord> _projectTrips(
@@ -359,13 +413,7 @@ class HarmonyGalleryController extends GalleryController {
         : '${DateUtils.dateOnly(local).toIso8601String().split('T').first} '
               '${TimeOfDay.fromDateTime(local).hour.toString().padLeft(2, '0')}:'
               '${TimeOfDay.fromDateTime(local).minute.toString().padLeft(2, '0')}';
-    final balance = switch ((amount, currency)) {
-      (final int value, 'CNY') => GalleryCurrency.cny.format(value),
-      (final int value, 'JPY') => GalleryCurrency.jpy.format(value),
-      (final int value, 'HKD') => GalleryCurrency.hkd.format(value),
-      (final int value, 'MOP') => 'MOP\$${formatGalleryMoney(value)}',
-      _ => '暂不可用',
-    };
+    final balance = _balanceText(amount, currency);
     return GalleryCard.live(
       id: id,
       name: name,
@@ -392,5 +440,15 @@ class HarmonyGalleryController extends GalleryController {
         if (cardType == CardTypes.octopusTunion || currency == 'HKD') 'octopus',
       ],
     );
+  }
+
+  static String _balanceText(int? amount, String? currency) {
+    return switch ((amount, currency)) {
+      (final int value, 'CNY') => GalleryCurrency.cny.format(value),
+      (final int value, 'JPY') => GalleryCurrency.jpy.format(value),
+      (final int value, 'HKD') => GalleryCurrency.hkd.format(value),
+      (final int value, 'MOP') => 'MOP\$${formatGalleryMoney(value)}',
+      _ => '暂不可用',
+    };
   }
 }

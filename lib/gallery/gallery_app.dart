@@ -15,13 +15,26 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app/app_info.dart';
+import '../app/app_dependencies.dart';
+import '../app/harmony_gallery_controller.dart';
+import '../features/archive/presentation/archive_transfer_dialogs.dart';
+import '../features/expert/expert_formatters.dart';
+import '../features/reference_data/data/city_union_lookup_rules.dart';
+import '../features/reference_data/data/tunion_knowledge_base.dart';
+import '../features/settings/presentation/diagnostic_export_dialog.dart';
 import '../features/settings/presentation/firebase_analytics_tile.dart';
+import '../features/transit_analysis/balance_interpretation.dart';
+import '../features/transit_analysis/tunion_analysis_models.dart';
 import '../features/trips/journey_transport_icon.dart';
 import '../features/trips/trip_filters.dart';
 import '../platform/browser/feedback_browser.dart';
 import '../platform/qr/qr_image_picker.dart';
 import '../platform/storage/archive_document_store.dart';
+import '../protocols/transit/card_parser.dart';
+import '../protocols/transit/city_union/city_union_models.dart';
+import '../protocols/transit/tunion/tunion_models.dart';
 import '../shared/app_support.dart';
+import '../shared/domain/archive_conflict_policy.dart';
 import 'gallery_controller.dart';
 import 'gallery_balance_presentation.dart';
 import 'gallery_color_engine.dart';
@@ -49,6 +62,8 @@ part 'gallery_read_prompt.dart';
 part 'gallery_wallet_item.dart';
 part 'gallery_detail.dart';
 part 'gallery_face_crop.dart';
+part 'gallery_live_expert.dart';
+part 'gallery_live_knowledge.dart';
 
 class GalleryApp extends StatefulWidget {
   const GalleryApp({
@@ -287,6 +302,8 @@ class _GalleryViewState extends State<_GalleryView> {
   final Set<String> _walletArrivals = {};
   GallerySpendingSelection _spendingSelection =
       const GallerySpendingSelection.all();
+  Future<GalleryKnowledgeIndex>? _liveKnowledgeBrowse;
+  KnowledgeBase? _browsedKnowledge;
   double _detailScrollDeficit = 0;
   double _detailMaxExtent = 0;
   double _detailShrinkDistance = 0;
@@ -509,16 +526,25 @@ class _GalleryViewState extends State<_GalleryView> {
     }
     widget.anchors.scheduleMeasure();
     if (_entry.overlay != null) {
-      return Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.viewInsetsOf(context).bottom,
-        ),
-        child: SafeArea(
-          bottom: false,
-          child: Stack(
-            key: _menuRoot,
-            fit: StackFit.expand,
-            children: _overlay(),
+      final sheet = _entry.overlay!.isBottomSheet;
+      return AnnotatedRegion<SystemUiOverlayStyle>(
+        value: (t.dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
+            .copyWith(
+              statusBarColor: Colors.transparent,
+              systemNavigationBarColor: sheet ? t.raised : t.canvas,
+              systemNavigationBarDividerColor: Colors.transparent,
+            ),
+        child: Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.viewInsetsOf(context).bottom,
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: Stack(
+              key: _menuRoot,
+              fit: StackFit.expand,
+              children: _overlay(),
+            ),
           ),
         ),
       );

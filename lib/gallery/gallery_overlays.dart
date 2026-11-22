@@ -17,13 +17,7 @@ extension _GalleryOverlays on _GalleryViewState {
         type == GalleryOverlay.mode) {
       return _dropdownOverlay(type);
     }
-    final sheet = [
-      GalleryOverlay.face,
-      GalleryOverlay.trip,
-      GalleryOverlay.export,
-      GalleryOverlay.importPreview,
-      GalleryOverlay.rawFeedback,
-    ].contains(type);
+    final sheet = type.isBottomSheet;
     return [
       LayoutBuilder(
         builder: (context, constraints) {
@@ -36,6 +30,7 @@ extension _GalleryOverlays on _GalleryViewState {
             alignment: sheet ? Alignment.bottomCenter : Alignment.center,
             child: SafeArea(
               top: true,
+              bottom: !sheet,
               child: Padding(
                 padding: EdgeInsets.fromLTRB(
                   sheet ? 0 : 16,
@@ -84,6 +79,7 @@ extension _GalleryOverlays on _GalleryViewState {
                               boxShadow: t.shadows(GalleryElevation.modal),
                             ),
                             child: Material(
+                              key: const ValueKey('gallery-modal-surface'),
                               color: t.raised,
                               shape: RoundedRectangleBorder(
                                 side: BorderSide(color: t.line),
@@ -93,38 +89,43 @@ extension _GalleryOverlays on _GalleryViewState {
                                 ),
                               ),
                               clipBehavior: Clip.antiAlias,
-                              child: SingleChildScrollView(
-                                padding: EdgeInsets.all(nameForm ? 18 : 22),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: _text(
-                                            _overlayTitle(type),
-                                            role: GalleryTypography.section,
-                                            weight: FontWeight.w600,
+                              child: SafeArea(
+                                top: false,
+                                left: false,
+                                right: false,
+                                child: SingleChildScrollView(
+                                  padding: EdgeInsets.all(nameForm ? 18 : 22),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: _text(
+                                              _overlayTitle(type),
+                                              role: GalleryTypography.section,
+                                              weight: FontWeight.w600,
+                                            ),
                                           ),
-                                        ),
-                                        IconButton(
-                                          autofocus:
-                                              type != GalleryOverlay.save &&
-                                              type != GalleryOverlay.rename,
-                                          tooltip: '关闭',
-                                          onPressed: c.back,
-                                          icon: const Icon(
-                                            Icons.close_rounded,
-                                            size: 21,
+                                          IconButton(
+                                            autofocus:
+                                                type != GalleryOverlay.save &&
+                                                type != GalleryOverlay.rename,
+                                            tooltip: '关闭',
+                                            onPressed: c.back,
+                                            icon: const Icon(
+                                              Icons.close_rounded,
+                                              size: 21,
+                                            ),
                                           ),
-                                        ),
-                                      ],
-                                    ),
-                                    _gap(nameForm ? 8 : 12),
-                                    _overlayBody(type),
-                                  ],
+                                        ],
+                                      ),
+                                      _gap(nameForm ? 8 : 12),
+                                      _overlayBody(type),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),

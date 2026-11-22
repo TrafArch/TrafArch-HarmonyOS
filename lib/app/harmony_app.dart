@@ -4,7 +4,6 @@ import 'package:flutter/widgets.dart';
 
 import '../features/qr/application/qr_acquisition.dart';
 import '../features/qr/presentation/qr_page.dart';
-import '../features/reference_data/presentation/knowledge_base_page.dart';
 import '../gallery/gallery_app.dart';
 import '../gallery/gallery_consent_screen.dart';
 import '../gallery/gallery_controller.dart';
@@ -97,7 +96,6 @@ class _HarmonyGalleryState extends State<_HarmonyGallery>
         app: _app,
         acquisition: const QrAcquisition(useDartGallery: true),
       ),
-      GalleryPage.knowledge: (_) => KnowledgeBasePage(app: _app),
     },
   );
 }

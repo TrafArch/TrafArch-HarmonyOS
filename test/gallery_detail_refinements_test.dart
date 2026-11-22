@@ -146,7 +146,14 @@ void main() {
         expect(number.top, greaterThan(title.bottom));
         expect(
           find.descendant(of: face, matching: find.byType(SvgPicture)),
-          findsNWidgets(2),
+          findsOneWidget,
+        );
+        final cityUnion = tester.widget<Image>(
+          find.byKey(ValueKey('detail-face-cu-${c.current.id}')),
+        );
+        expect(
+          cityUnion.image,
+          const AssetImage('assets/gallery/city-union-logo.png'),
         );
         expect(tester.takeException(), isNull);
       }
@@ -154,29 +161,35 @@ void main() {
     },
   );
 
-  testWidgets('short ledger still contracts to the capsule by riding content up', (
-    tester,
-  ) async {
-    c.openCard(c.cards.firstWhere((card) => card.id == 'suica'));
-    await mount(tester);
-    final face = find.byKey(const ValueKey('card-face-suica'));
-    final scroll = tester.state<ScrollableState>(galleryVerticalScroll());
-    // 记录较短也补足滚动距离，滚到底时卡面完整收为胶囊，内容随之上移。
-    expect(scroll.position.maxScrollExtent, greaterThan(0));
-    scroll.position.jumpTo(scroll.position.maxScrollExtent);
-    await tester.pumpAndSettle();
-    expect(tester.getSize(face).height, lessThan(80));
-    final sample = c.trips.first;
-    c.data.ledger('suica').addAll(
-      List.generate(30, (index) => {...sample, 'entryStation': '站点 $index'}),
-    );
-    c.update(() {});
-    await tester.pumpAndSettle();
-    scroll.position.jumpTo(scroll.position.maxScrollExtent);
-    await tester.pumpAndSettle();
-    expect(tester.getSize(face).height, lessThan(80));
-    expect(tester.takeException(), isNull);
-  });
+  testWidgets(
+    'short ledger still contracts to the capsule by riding content up',
+    (tester) async {
+      c.openCard(c.cards.firstWhere((card) => card.id == 'suica'));
+      await mount(tester);
+      final face = find.byKey(const ValueKey('card-face-suica'));
+      final scroll = tester.state<ScrollableState>(galleryVerticalScroll());
+      // 记录较短也补足滚动距离，滚到底时卡面完整收为胶囊，内容随之上移。
+      expect(scroll.position.maxScrollExtent, greaterThan(0));
+      scroll.position.jumpTo(scroll.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      expect(tester.getSize(face).height, lessThan(80));
+      final sample = c.trips.first;
+      c.data
+          .ledger('suica')
+          .addAll(
+            List.generate(
+              30,
+              (index) => {...sample, 'entryStation': '站点 $index'},
+            ),
+          );
+      c.update(() {});
+      await tester.pumpAndSettle();
+      scroll.position.jumpTo(scroll.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      expect(tester.getSize(face).height, lessThan(80));
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   for (final reduceMotion in [false, true]) {
     for (final autoSave in [false, true]) {
