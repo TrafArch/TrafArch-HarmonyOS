@@ -1,6 +1,11 @@
-/// 应用元信息；打包前从 pubspec.yaml 同步本次版本，打包后 pubspec 预留下次构建号。
+import 'package:flutter/services.dart';
+
+/// 应用元信息，正式运行时使用鸿蒙安装包的版本信息。
 class AppInfo {
   AppInfo._();
+
+  static const _channel = MethodChannel('transit_card_analyzer/app_info');
+  static ({String name, int code})? _installedVersion;
 
   /// 应用英文名称。
   static const String appNameEn = 'TrafArch';
@@ -11,14 +16,28 @@ class AppInfo {
   /// 当前展示用应用名称：中文名留空时回退为英文名。
   static String get appName => appNameZh.isEmpty ? appNameEn : appNameZh;
 
-  static const String version = '1.0.8-beta.2';
-  static const String buildNumber = '2215';
+  static String get version => _installedVersion?.name ?? '开发版';
+  static String get buildNumber => (_installedVersion?.code ?? 0).toString();
 
-  /// 关于页展示的构建号与 Android versionCode 保持同值。
   static String get displayBuildNumber => buildNumber;
 
-  /// Android 清单版本码：直接使用 AppInfo.buildNumber。
-  static String get androidVersionCode => buildNumber;
   static const String author = 'kajolno';
   static const String copyright = '© 2026 kajolno';
+
+  static Future<void> loadInstalledVersion() async {
+    try {
+      final info = await _channel.invokeMapMethod<String, Object?>(
+        'getPackageInfo',
+      );
+      final name = info?['versionName'];
+      final code = info?['versionCode'];
+      if (name is String && name.trim().isNotEmpty && code is int && code > 0) {
+        _installedVersion = (name: name, code: code);
+      }
+    } on MissingPluginException {
+      // Flutter 测试和预览可在没有鸿蒙宿主的环境运行。
+    } on PlatformException {
+      // 系统版本查询失败时仍可启动应用。
+    }
+  }
 }

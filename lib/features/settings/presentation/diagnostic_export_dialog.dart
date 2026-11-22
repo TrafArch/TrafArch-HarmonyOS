@@ -48,7 +48,7 @@ class _DiagnosticExportDialogState extends State<_DiagnosticExportDialog> {
     });
     await widget.app.exportLog(sessionIds: Set.of(selected));
     if (!mounted) return;
-    if (widget.app.logExportFailed) {
+    if (widget.app.logExportFailed || widget.app.logExportMessage == null) {
       setState(() {
         busy = false;
         error = widget.app.logExportMessage;
@@ -152,7 +152,7 @@ class _DiagnosticExportDialogState extends State<_DiagnosticExportDialog> {
                 '选择需要排查的读取记录。完整诊断包含已读取的卡号、卡片名称、卡种；按解析器和字段分类，附带卡片或二维码原始数据，请检查后再分享。',
               ),
               const SizedBox(height: 12),
-              const Text('导出所选读卡及二维码记录中已支持解析器的当次解析字段与原始响应，保存在本机下载目录。'),
+              const Text('导出所选读卡及二维码记录的解析字段与原始响应，可在系统文件管理器中选择保存位置。'),
               if (sessions.isNotEmpty)
                 Align(
                   alignment: Alignment.centerRight,

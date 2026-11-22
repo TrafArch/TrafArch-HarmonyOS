@@ -106,14 +106,7 @@ void main() {
       find.text('版本 ${AppInfo.version} (${AppInfo.displayBuildNumber})'),
       findsOneWidget,
     );
-    expect(
-      AppInfo.displayBuildNumber,
-      AppInfo.buildNumber,
-    );
-    expect(
-      AppInfo.androidVersionCode,
-      AppInfo.buildNumber,
-    );
+    expect(AppInfo.displayBuildNumber, AppInfo.buildNumber);
     expect(await service.checkNow(), isNull);
     expect(await service.checkOnce(), isNull);
     expect(calls, 0);
@@ -483,6 +476,59 @@ void main() {
       expect(calls, 1);
     },
   );
+
+  testWidgets('startup prompt respects the launch claim', (tester) async {
+    var calls = 0;
+    final service = UpdateService(
+      currentBuild: 1,
+      manifestUrl: 'https://example.com/manifest.json',
+      fetch: (_, _) async {
+        calls++;
+        return Uint8List.fromList(utf8.encode(jsonEncode(appManifest(2))));
+      },
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: UpdatePrompt(
+          service: service,
+          shouldShow: () => false,
+          child: const Scaffold(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(calls, 1);
+  });
+
+  testWidgets('manual update button reports when already current', (
+    tester,
+  ) async {
+    String? feedback;
+    final service = UpdateService(
+      currentBuild: 2,
+      manifestUrl: 'https://example.com/manifest.json',
+      fetch: (_, _) async =>
+          Uint8List.fromList(utf8.encode(jsonEncode(appManifest(2)))),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: UpdateCheckButton(
+            service: service,
+            onFeedback: (message, isError) {
+              feedback = message;
+              expect(isError, isFalse);
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('检查更新'));
+    await tester.pumpAndSettle();
+    expect(feedback, '暂无更新');
+    expect(find.byType(AlertDialog), findsNothing);
+  });
 
   test('TU independent install persists; digest/schema failure retains old snapshot; corrupt restart falls back', () async {
     final directory = await Directory.systemTemp.createTemp('updates-test-');

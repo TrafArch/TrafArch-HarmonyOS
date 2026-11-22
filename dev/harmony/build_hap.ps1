@@ -7,8 +7,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
 $repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $FlutterRoot = (Resolve-Path -LiteralPath $FlutterRoot).Path
+. (Join-Path $PSScriptRoot 'version.ps1')
 $revision = 'c5880c605eb77e82d5585cef24d7b4228d84a84d'
 $actualRevision = git -C $FlutterRoot rev-parse HEAD
 if ($LASTEXITCODE -ne 0 -or $actualRevision -ne $revision) {
@@ -37,19 +39,32 @@ $env:PATH = @(
 $outputDir = Join-Path $repo 'build/harmony'
 $toolchain = Join-Path $outputDir 'toolchain'
 [void][IO.Directory]::CreateDirectory($toolchain)
-$archive = if ($SqliteArchive) { (Resolve-Path -LiteralPath $SqliteArchive).Path } else { Join-Path $toolchain 'sqlite-amalgamation-3540000.zip' }
-if (!(Test-Path -LiteralPath $archive)) {
-    $ProgressPreference = 'SilentlyContinue'
-    Invoke-WebRequest -Uri 'https://sqlite.org/2026/sqlite-amalgamation-3540000.zip' -OutFile $archive -TimeoutSec 60
-}
-$expected = '68E913B0FE8EC6B4E5F391C594A28872884E80D6CD042A1E50C957BE46B5AA4D'
-if ((Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash -ne $expected) {
-    throw 'SQLite source archive SHA-256 does not match.'
-}
-Expand-Archive -LiteralPath $archive -DestinationPath $toolchain -Force
-
-Push-Location -LiteralPath $repo
+$buildLock = $null
+$pushedLocation = $false
 try {
+    try {
+        $buildLock = [IO.File]::Open(
+            (Join-Path $outputDir '.build.lock'),
+            [IO.FileMode]::OpenOrCreate,
+            [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None
+        )
+    } catch [IO.IOException] {
+        throw 'Another Harmony build is already running for this project.'
+    }
+    $archive = if ($SqliteArchive) { (Resolve-Path -LiteralPath $SqliteArchive).Path } else { Join-Path $toolchain 'sqlite-amalgamation-3540000.zip' }
+    if (!(Test-Path -LiteralPath $archive)) {
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri 'https://sqlite.org/2026/sqlite-amalgamation-3540000.zip' -OutFile $archive -TimeoutSec 60
+    }
+    $expected = '68E913B0FE8EC6B4E5F391C594A28872884E80D6CD042A1E50C957BE46B5AA4D'
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash -ne $expected) {
+        throw 'SQLite source archive SHA-256 does not match.'
+    }
+    Expand-Archive -LiteralPath $archive -DestinationPath $toolchain -Force
+
+    Push-Location -LiteralPath $repo
+    $pushedLocation = $true
     & $flutter precache --ohos
     if ($LASTEXITCODE -ne 0) { throw 'Flutter OHOS engine preparation failed.' }
     & $flutter pub get --enforce-lockfile
@@ -128,17 +143,11 @@ final code = input.config.code;
     & $npm install --offline --no-audit --no-fund --ignore-scripts
     if ($LASTEXITCODE -ne 0) { throw 'Could not install the local Flutter Hvigor plugin.' }
 
-    $version = [regex]::Match([IO.File]::ReadAllText((Join-Path $repo 'pubspec.yaml')), '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)(?:-[a-zA-Z]+\.(\d+))?\+(\d+)\s*$')
-    if (!$version.Success) { throw 'Unsupported pubspec version format.' }
-    $versionName = $version.Groups[1].Value
-    if ($version.Groups[2].Success) { $versionName += '.' + $version.Groups[2].Value }
-    $properties = @(
-        ('hwsdk.dir=' + $sdk.Replace('\', '/')),
-        ('flutter.sdk=' + $FlutterRoot.Replace('\', '/')),
-        ('flutter.versionName=' + $versionName),
-        ('flutter.versionCode=' + $version.Groups[3].Value)
-    )
-    [IO.File]::WriteAllLines((Join-Path $repo '.flutter-harmony.properties'), $properties)
+    $appScopePath = Join-Path $repo 'AppScope/app.json5'
+    $appVersion = Read-TrafArchHarmonyVersion -Path $appScopePath
+    Write-TrafArchHarmonyProperties -Path (Join-Path $repo '.flutter-harmony.properties') `
+        -VersionName $appVersion.Name -VersionCode $appVersion.Code `
+        -SdkRoot $sdk -FlutterRoot $FlutterRoot
     $harDir = Join-Path $repo 'entry/.flutter-engine'
     [void][IO.Directory]::CreateDirectory($harDir)
     foreach ($har in @('flutter_embedding_debug.har','arm64_v8a_debug.har')) {
@@ -207,7 +216,18 @@ final code = input.config.code;
     if ($product.signingConfig -and (Test-Path -LiteralPath $signed)) {
         Write-Host "Signed HAP for installation: $signed"
     }
+    $nextVersionCode = Step-TrafArchHarmonyBuildCode `
+        -Path $appScopePath -ExpectedCode $appVersion.Code
+    Write-TrafArchHarmonyProperties -Path (Join-Path $repo '.flutter-harmony.properties') `
+        -VersionName $appVersion.Name -VersionCode $nextVersionCode `
+        -SdkRoot $sdk -FlutterRoot $FlutterRoot
+    Write-Host "Built HAP version: $($appVersion.Name) ($($appVersion.Code)); next build: $nextVersionCode."
 
 } finally {
-    Pop-Location
+    if ($pushedLocation) {
+        Pop-Location
+    }
+    if ($null -ne $buildLock) {
+        $buildLock.Dispose()
+    }
 }

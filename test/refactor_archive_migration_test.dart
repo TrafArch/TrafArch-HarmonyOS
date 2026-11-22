@@ -1051,6 +1051,6 @@ ScanPresentation _presentation({
 
 class _UnusedExporter implements LogExporter {
   @override
-  Future<String> saveToDownloads(String fileName, String content) =>
+  Future<String> saveFile(String fileName, String content) =>
       throw StateError('save confirmation must not export files');
 }

@@ -714,11 +714,11 @@ class ArchiveController extends OwnedNotifier {
       final now = DateTime.now();
       final content = buildArchiveHistoryExport(histories, exportedAt: now);
       final stamp = now.toIso8601String().replaceAll(RegExp(r'[^0-9]'), '');
-      final path = await exporter.saveToDownloads(
+      final name = await exporter.saveFile(
         'transit_card_records_$stamp.txt',
         content,
       );
-      return '已导出 ${histories.length} 张卡片到下载目录：$path';
+      return name == null ? '已取消导出' : '已导出 ${histories.length} 张卡片：$name';
     } catch (e) {
       log('卡片导出失败：$e');
       return '导出失败：$e';

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import 'package:transit_card_analyzer/app/harmony_gallery_controller.dart';
 import 'package:transit_card_analyzer/features/qr/data/harmony_qr_scanner.dart';
 import 'package:transit_card_analyzer/features/qr/presentation/qr_page.dart';
 import 'package:transit_card_analyzer/features/qr/presentation/qr_scan_page.dart';
+import 'package:transit_card_analyzer/features/updates/update_service.dart';
 import 'package:transit_card_analyzer/gallery/gallery_app.dart';
 import 'package:transit_card_analyzer/gallery/gallery_controller.dart';
 import 'package:transit_card_analyzer/platform/nfc/nfc_models.dart';
@@ -211,6 +213,60 @@ void main() {
     await tester.tap(find.text('记录运行日志'));
     await tester.pumpAndSettle();
     expect(app.loggingEnabled, isTrue);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('鸿蒙启动只提示一次更新，设置内可手动检查', (tester) async {
+    var calls = 0;
+    final updates = UpdateService(
+      currentBuild: 1,
+      manifestUrl: 'https://example.com/manifest.json',
+      fetch: (_, _) async => Uint8List.fromList(
+        utf8.encode(
+          jsonEncode({
+            'format_version': 1,
+            'app': {
+              'build': ++calls == 1 ? 2 : 1,
+              'version': '2.0.0',
+              'notes': '更新说明',
+              'download_url': 'https://example.com/app.hap',
+            },
+          }),
+        ),
+      ),
+    );
+    final store = MemorySettingsStore({SettingsKeys.legalConsent: 'true'});
+    await tester.pumpWidget(
+      HarmonyApp(
+        settingsStore: store,
+        createDependencies: (store) => AppDependencies(
+          settingsStore: store,
+          bundle: MissingTestAssets(),
+          database: testDatabase(),
+          channel: _TagChannel(),
+          updateService: updates,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('发现新版本 2.0.0'), findsOneWidget);
+    await tester.tap(find.text('暂不更新'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('设置'));
+    await tester.pumpAndSettle();
+    final check = find.text('检查更新');
+    await tester.scrollUntilVisible(
+      check,
+      250,
+      scrollable: galleryVerticalScroll(),
+    );
+    await tester.ensureVisible(check);
+    await tester.pumpAndSettle();
+    await tester.tap(check);
+    await tester.pumpAndSettle();
+    expect(find.text('暂无更新'), findsOneWidget);
+    expect(calls, 2);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

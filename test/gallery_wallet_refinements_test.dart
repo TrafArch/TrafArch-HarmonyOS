@@ -659,6 +659,86 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'regional brand logos replace nothing and TU dual cards stack locally',
+    (tester) async {
+      final shenzhen = GalleryCard.live(
+        id: 'shanghai',
+        saved: true,
+        name: '深圳通（交通联合版）',
+        tail: '0000',
+        pan: '3104 8704 0000 0000',
+        rawBalance: '¥25.00',
+        city: '深圳',
+        type: '深圳通（交通联合版）',
+        valid: '2029-12',
+        when: '2026-11-22 11:00',
+        count: '1 条',
+        face: 'blue',
+        applications: const ['tu', 'shenzhen'],
+        liveCurrencyCode: 'CNY',
+      );
+      final lingnan = GalleryCard.live(
+        id: 'lingnan-single',
+        saved: true,
+        name: '岭南通',
+        tail: '0001',
+        pan: '3104 8700 0000 0001',
+        rawBalance: '¥18.00',
+        city: '广东',
+        type: '岭南通',
+        valid: '未知',
+        when: '2026-11-22 11:01',
+        count: '1 条',
+        face: 'graphite',
+        applications: const ['lingnan'],
+        liveCurrencyCode: 'CNY',
+      );
+      c.update(() {
+        c.cards[c.cards.indexWhere((card) => card.id == 'shanghai')] = shenzhen;
+        c.cards.add(lingnan);
+        c.hasRead = true;
+      });
+      c.navigate(GalleryPage.home);
+      await mount(tester);
+
+      final tu = find.byKey(const ValueKey('face-tunion-shanghai'));
+      final shenzhenLogo = find.byKey(
+        const ValueKey('face-shenzhen-tong-shanghai'),
+      );
+      expect(tu, findsOneWidget);
+      expect(shenzhenLogo, findsOneWidget);
+      expect(
+        tester.getBottomLeft(tu).dy,
+        lessThan(tester.getTopLeft(shenzhenLogo).dy),
+      );
+      expect(
+        tester.widget<Image>(shenzhenLogo).image,
+        const AssetImage('assets/gallery/shenzhen-tong-logo.png'),
+      );
+      expect(
+        find.byKey(const ValueKey('face-lingnan-tong-shanghai')),
+        findsNothing,
+      );
+
+      c.navigate(GalleryPage.cards);
+      await tester.pumpAndSettle();
+      final lingnanLogo = find.byKey(
+        const ValueKey('wallet-lingnan-tong-lingnan-single'),
+      );
+      expect(lingnanLogo, findsOneWidget);
+      expect(
+        tester.widget<Image>(lingnanLogo).image,
+        const AssetImage('assets/gallery/lingnan-tong-logo.png'),
+      );
+      expect(
+        find.byKey(const ValueKey('wallet-tunion-lingnan-single')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('card face keeps its fields separate for long and unknown money', (
     tester,
   ) async {
@@ -692,8 +772,8 @@ void main() {
           final title = tester.getRect(
             find.byKey(const ValueKey('face-title-shanghai')),
           );
-          final tail = tester.getRect(
-            find.byKey(const ValueKey('face-tail-shanghai')),
+          final number = tester.getRect(
+            find.byKey(const ValueKey('face-card-number-shanghai')),
           );
           final amount = tester.getRect(
             find.byKey(
@@ -702,7 +782,7 @@ void main() {
               ),
             ),
           );
-          for (final field in [title, tail, amount]) {
+          for (final field in [title, number, amount]) {
             expect(face.contains(field.topLeft), isTrue);
             expect(
               face.contains(field.bottomRight - const Offset(.01, .01)),
@@ -710,8 +790,9 @@ void main() {
             );
           }
           expect(amount.top, greaterThan(title.bottom));
-          expect(tail.top, greaterThan(title.bottom));
-          expect(amount.overlaps(tail), isFalse);
+          expect(number.top, greaterThan(title.bottom));
+          expect(number.top, greaterThan(amount.bottom));
+          expect(amount.overlaps(number), isFalse);
           expect(find.text('当前余额'), findsNothing);
           expect(find.textContaining('最近读取'), findsNothing);
           if (balance == '—') {
@@ -720,9 +801,8 @@ void main() {
               findsNothing,
             );
           } else {
-            expect(find.text('CNY ¥'), findsOneWidget);
+            expect(find.text('CN ¥'), findsOneWidget);
           }
-          if (scale >= 1.5) expect(tail.top, greaterThan(amount.bottom));
           expect(
             tester.takeException(),
             isNull,

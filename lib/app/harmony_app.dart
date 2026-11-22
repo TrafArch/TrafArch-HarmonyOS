@@ -60,6 +60,7 @@ class _HarmonyGalleryState extends State<_HarmonyGallery>
       '$enabled',
     ),
   )..load();
+  bool _startupUpdateShown = false;
 
   @override
   void initState() {
@@ -86,9 +87,17 @@ class _HarmonyGalleryState extends State<_HarmonyGallery>
     super.dispose();
   }
 
+  bool _claimStartupUpdatePrompt() {
+    if (_startupUpdateShown) return false;
+    _startupUpdateShown = true;
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) => GalleryApp(
     controller: _controller,
+    updates: _app.updates,
+    claimStartupUpdatePrompt: _claimStartupUpdatePrompt,
     preferences: _preferences,
     openWebLink: const MethodChannelFeedbackBrowser().open,
     livePageBuilders: {

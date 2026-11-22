@@ -1,4 +1,5 @@
 import { FlutterAbility, FlutterEngine } from '@ohos/flutter_ohos';
+import { FileChannels } from '../platform/FileChannels';
 import { NfcChannels } from '../platform/NfcChannels';
 import { PlatformChannels } from '../platform/PlatformChannels';
 import { QrChannels } from '../platform/QrChannels';
@@ -6,6 +7,7 @@ import { QrChannels } from '../platform/QrChannels';
 export default class EntryAbility extends FlutterAbility {
   private nfc?: NfcChannels;
   private platform?: PlatformChannels;
+  private files?: FileChannels;
   private qr?: QrChannels;
   private foreground = false;
 
@@ -18,6 +20,7 @@ export default class EntryAbility extends FlutterAbility {
     });
     this.nfc.setForeground(this.foreground);
     this.platform = new PlatformChannels(messenger, this.context);
+    this.files = new FileChannels(messenger, this.context);
     this.qr = new QrChannels(messenger, this.context, engine.getFlutterRenderer());
   }
 
@@ -36,9 +39,11 @@ export default class EntryAbility extends FlutterAbility {
   cleanUpFlutterEngine(engine: FlutterEngine): void {
     this.nfc?.dispose();
     this.platform?.dispose();
+    this.files?.dispose();
     this.qr?.dispose();
     this.nfc = undefined;
     this.platform = undefined;
+    this.files = undefined;
     this.qr = undefined;
     super.cleanUpFlutterEngine(engine);
   }

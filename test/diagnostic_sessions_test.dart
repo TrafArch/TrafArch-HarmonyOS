@@ -388,7 +388,7 @@ class _Exporter implements LogExporter {
   String? name;
   String? content;
   @override
-  Future<String> saveToDownloads(String fileName, String content) async {
+  Future<String> saveFile(String fileName, String content) async {
     name = fileName;
     this.content = content;
     return 'Download/$fileName';

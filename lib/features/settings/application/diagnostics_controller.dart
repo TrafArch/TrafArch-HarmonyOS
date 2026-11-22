@@ -60,12 +60,11 @@ class DiagnosticsController extends OwnedNotifier {
         throw StateError('所选日志已被清理，请重新选择');
       }
       final content = buildFullDiagnostics(selected, now);
-      final path = await _logExporter.saveToDownloads(
+      final name = await _logExporter.saveFile(
         'transit_card_log_${_fileStamp(now)}.json',
         content,
       );
-      _logExportFailed = false;
-      _logExportMessage = '已导出到下载目录：$path';
+      if (name != null) _logExportMessage = '已保存：$name';
     } on PlatformException catch (e) {
       _logExportFailed = true;
       _logExportMessage = '导出失败：${e.message ?? e.code}';

@@ -58,7 +58,7 @@ void main() {
       await app.exportLog();
 
       expect(app.logExportFailed, isFalse);
-      expect(app.logExportMessage, contains('已导出到下载目录'));
+      expect(app.logExportMessage, '已保存：${exporter.fileName}');
       expect(
         exporter.fileName,
         matches(RegExp(r'^transit_card_log_\d{8}_\d{6}\.json$')),
@@ -119,7 +119,7 @@ class _RecordingExporter implements LogExporter {
   bool fail = false;
 
   @override
-  Future<String> saveToDownloads(String fileName, String content) async {
+  Future<String> saveFile(String fileName, String content) async {
     if (fail) {
       throw PlatformException(
         code: 'PERMISSION_DENIED',
@@ -128,6 +128,6 @@ class _RecordingExporter implements LogExporter {
     }
     this.fileName = fileName;
     this.content = content;
-    return 'Download/$fileName';
+    return fileName;
   }
 }

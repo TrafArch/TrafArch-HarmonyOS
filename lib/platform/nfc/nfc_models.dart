@@ -88,6 +88,8 @@ class NfcScanResult {
   });
 
   factory NfcScanResult.fromMap(Map<dynamic, dynamic> map) {
+    final timestamp =
+        DateTime.tryParse('${map['timestamp']}') ?? DateTime.now();
     return NfcScanResult(
       sessionId: map['sessionId']?.toString(),
       metadataIssues: List.unmodifiable(
@@ -122,7 +124,9 @@ class NfcScanResult {
       tagDescription: map['tagDescription']?.toString(),
       isoDepConnected: map['isoDepConnected'] == true,
       felicaConnected: map['felicaConnected'] == true,
-      timestamp: DateTime.tryParse('${map['timestamp']}') ?? DateTime.now(),
+      // Platform timestamps describe one instant; normalize before device-local
+      // fields and archive offsets consume them.
+      timestamp: timestamp.toLocal(),
     );
   }
 }

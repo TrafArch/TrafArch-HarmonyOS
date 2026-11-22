@@ -70,6 +70,13 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
       expect(export.hitTestable(), findsOneWidget);
+      exporter.cancel = true;
+      await tester.tap(export);
+      await tester.pumpAndSettle();
+      expect(tester.widget<CheckboxListTile>(row).value, isTrue);
+      expect(app.logExportMessage, isNull);
+      expect(app.logExportFailed, isFalse);
+      exporter.cancel = false;
       await tester.tap(export);
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsNothing);
@@ -188,10 +195,12 @@ void main() {
 class _Exporter implements LogExporter {
   String? name;
   String? content;
+  bool cancel = false;
   @override
-  Future<String> saveToDownloads(String fileName, String content) async {
+  Future<String?> saveFile(String fileName, String content) async {
+    if (cancel) return null;
     name = fileName;
     this.content = content;
-    return 'Download/$fileName';
+    return fileName;
   }
 }

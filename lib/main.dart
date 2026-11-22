@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import 'app/app_info.dart';
 import 'app/harmony_app.dart';
 import 'app/theme/safe_error_screen.dart';
 import 'app/third_party_licenses.dart';
@@ -12,6 +13,7 @@ Future<void> main() async {
   MobileScannerPlatform.instance = HarmonyQrScanner();
   registerThirdPartyLicenses();
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  await AppInfo.loadInstalledVersion();
   installReleaseErrorPresentation();
   runApp(const HarmonyApp());
 }

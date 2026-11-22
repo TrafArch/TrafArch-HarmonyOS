@@ -410,11 +410,13 @@ class AppDependencies extends OwnedNotifier {
     final parsed = view.parsedCard;
     if (parsed != null) {
       final balance = view.balanceInterpretation;
+      final observedBalance =
+          parsed.localCard?.info.observedBalance ?? parsed.info.balanceFen;
       final display = balance?.isOctopusTunion == true
           ? balance!.accountBalanceText
-          : parsed.info.balanceFen == null
+          : observedBalance == null
           ? 'n/a'
-          : '${view.cardCurrency.symbol}${(parsed.info.balanceFen! / 100).toStringAsFixed(2)}';
+          : '${view.cardCurrency.symbol}${(observedBalance / 100).toStringAsFixed(2)}';
       scan.addDiagnostic(
         '== 余额核对：parser=${parsed.parserId}; aid=${parsed.selectedAidHex}; '
         'parsedFen=${parsed.info.balanceFen}; '

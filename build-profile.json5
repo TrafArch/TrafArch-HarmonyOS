@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "C:/Users/kajolno/.ohos/config/default_TrafArch-Harmony_qouuJxlDAK6xmuCss7oeu02WnNVHRCdLyM72os2d1_A=.cer",
-          "keyAlias": "debugKey",
-          "keyPassword": "0000001BEF50970B999CE0E3FC7B255839733B7323ADB30E532DC24D983AA1DB39E9ACC80285A1304BE8D6",
-          "profile": "C:/Users/kajolno/.ohos/config/default_TrafArch-Harmony_qouuJxlDAK6xmuCss7oeu02WnNVHRCdLyM72os2d1_A=.p7b",
+          "certpath": "D:/iteam/TrafArch-Harmony/build/harmony/TrafArch-appgallery-release.cer",
+          "keyAlias": "kajolno",
+          "keyPassword": "0000002063D752E16FA01FF284CFB17DF34DDA53BEEEBA743551CA961BF048B020769E5272BB675BF4B5AF6EC25D7AEB",
+          "profile": "D:/iteam/TrafArch-Harmony/TrafArch_发布Release.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "C:/Users/kajolno/.ohos/config/default_TrafArch-Harmony_qouuJxlDAK6xmuCss7oeu02WnNVHRCdLyM72os2d1_A=.p12",
-          "storePassword": "0000001B3FBF97595CFAB3223311DB6DE261E9228E6FEC33327ABC29F0248CADC0298290631CF0AF99A511"
+          "storeFile": "D:/iteam/TrafArch-Harmony/TrafArch.p12",
+          "storePassword": "000000205A37D8742F78A2460AE758B5BEA43070CB209B2378D04A4DAA67C353ADB5692A0F75A36E9D12040B12DF9E8A"
         }
       },
       {
@@ -20,11 +20,11 @@
         "material": {
           "certpath": "D:/iteam/TrafArch-Harmony/build/harmony/TrafArch-appgallery-release.cer",
           "keyAlias": "kajolno",
-          "keyPassword": "00000020799CA46B10D4882404A4E8A9B5C4B289D174C9CF7CD992850B8EA084A55754F1DF4738AC11D8A89C9E126166",
+          "keyPassword": "000000209673292F4ED20A63D145BB779A1DE0ECD90DC1BE3C5FABEA909CF99E64B7E1F1A717A9715094EBB83554E268",
           "profile": "D:/iteam/TrafArch-Harmony/TrafArch_发布Release.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "D:/iteam/TrafArch-Harmony/TrafArch.p12",
-          "storePassword": "000000208FCE1D8AF4EEE7BBD433645A23B1B2538387F25287BDCB8101C3E65CB1ED443E7E4B79073085A228BA7A7B42"
+          "storePassword": "00000020C5B4358667268FF19FC0AC4F5AA314CBE34925211C8156491C2F7FE650C1570FABA1E4D991D940A90B350DE8"
         }
       }
     ],

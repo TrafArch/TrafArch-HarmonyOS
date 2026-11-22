@@ -8,6 +8,9 @@
 - 2.x 首页调用真实业务依赖；专家页按安卓最新 2.x 结构展示信息获取、交通数据解析、符合性与原始数据，交通应用信息、0x1A／0x1E 过程记录、交易明细和 CU 字段均来自本次读取。支持把已识别的卡片保存到原有 Drift 档案。行程和档案详情目前展示原版快照中的交易明细；完整行程投影、其他记录类型和历史批次浏览仍待接入。
 - 首页「扫码」进入真实乘车码解析页。相机使用 Camera Kit，首次扫描时请求相机权限；预览优先使用 NV21，也支持模拟器提供的 RGBA_8888。相册使用系统单选器，不申请全量相册权限。两条路径均在本地提取二维码原始字节，复用 Dart 的 JT/T 1179 解析器。
 - 设置页接入真实读卡数据：可修改已存在记录的处理策略、上海交通卡透支显示、运行日志，打开诊断日志管理器，并导入／导出卡片 JSON 备份。设置中的知识库使用 2.x 卡片、分段条和展开层级展示本地 TU／CU 参考库，不再跳转旧版设置页面。
+- 日志与卡片备份通过鸿蒙文件选择器保存到用户选择的位置，恢复时选择 TrafArch 导出的 JSON 文件。文件访问使用选择器授予的权限。
+- 2.x 设置的内联「关于 TrafArch」在配置更新清单后提供手动检查；正式入口启动时只检查并提示一次。读卡时间在平台边界统一从原生 UTC 转为设备本地时间，深圳通优先展示 PAY.SZT 已观察到的本地钱包余额。
+- 交通联合与岭南通或深圳通本地应用同时确认时，卡面按交通联合在上、本地品牌在下的双标排列；单标本地卡只显示对应的岭南通／深圳通 PNG。已保存卡片的品牌依据稳定卡型和冻结应用证据恢复。
 - 卡面更换、卡片排序和现场恢复尚未完整接入鸿蒙。不用预览功能冒充实际能力。
 
 ## Windows 构建
@@ -20,7 +23,13 @@
 
 脚本从根目录调用 Hvigor 构建 `entry`，不再复制项目。它把本地构建依赖放在忽略目录，不修改共享 Pub 缓存或依赖锁文件。SQLite 源码固定为 3.54.0 并核对 SHA-256；OHOS NDK 分别生成 `arm64-v8a` 和 `x86_64` 库，避免选到依赖 GLIBC 的 Linux 预编译库。默认 HAP 同时包含两种 ABI，脚本会校验两种架构的 ELF。配置签名后，安装使用 `entry/build/default/outputs/default/entry-default-signed.hap`，不要选旧的 ARM64 单架构包或 `build/harmony/TrafArch-ohos-arm64-x64-debug-unsigned.hap`。
 
+每次通过该脚本成功生成并校验 HAP 后，`AppScope/app.json5` 的 `versionCode` 自动递增，供下一次构建使用；当前 HAP 保留本次构建号。`-PrepareOnly`、依赖准备失败或 HAP 构建失败均不消耗构建号。脚本会同步 `.flutter-harmony.properties`，使后续 Hvigor／DevEco 构建也使用递增后的号码。
+
+版本文件更新逻辑可用 `pwsh -NoProfile -File .\dev\harmony\test_version.ps1` 单独检查；该测试只操作临时副本，不改变应用构建号。
+
 要用 DevEco 的构建按钮，先将上面的构建命令加上 `-PrepareOnly`，然后用 **File → Open** 打开仓库根目录。此后可以在同一目录运行 `ohpm install --all`，在 DevEco 选择 `entry` 构建。若手动运行 `flutter pub get` 刷新了包配置，再运行一次 `-PrepareOnly` 恢复 OHOS SQLite 构建配置。
+
+发布版本号与构建号在 `AppScope/app.json5` 的 `versionName` 和 `versionCode` 中设置。关于页、日志及更新检查读取已安装 HAP 的版本信息。
 
 Windows 桌面测试使用上游 Flutter：先用该 SDK 运行 `flutter pub get --enforce-lockfile`，再运行 `flutter test --no-pub`。不要混用上游 Flutter 的测试进程和 OHOS SDK 生成的包配置；回到 DevEco 构建前重新执行 `-PrepareOnly`。
 

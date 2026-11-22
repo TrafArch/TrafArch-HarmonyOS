@@ -25,9 +25,13 @@ AppDependencies createTestApp() => AppDependencies(
 );
 
 final _betaSwitch = find.widgetWithText(SwitchListTile, '启用新界面（beta）');
+final _gallerySwitch = find.widgetWithText(SwitchListTile, '使用 2.x 主界面');
 final _warning = find.byType(AlertDialog);
 final _decline = find.widgetWithText(TextButton, '不开启');
 final _confirm = find.widgetWithText(FilledButton, '确认开启');
+
+Finder _currentBetaSwitch() =>
+    find.byType(GalleryApp).evaluate().isEmpty ? _betaSwitch : _gallerySwitch;
 
 void _expectCountdown(WidgetTester tester, int seconds) {
   final button = find.widgetWithText(FilledButton, '确认开启（$seconds 秒）');
@@ -72,7 +76,7 @@ void main() {
       await tester.tap(find.byTooltip('设置'));
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(
-        _betaSwitch,
+        _currentBetaSwitch(),
         250,
         scrollable: galleryVerticalScroll(),
       );
@@ -80,16 +84,16 @@ void main() {
     }
 
     await openBetaSettings();
-    await tester.tap(_betaSwitch);
+    await tester.tap(_currentBetaSwitch());
     await tester.pump();
     expect(_warning, findsOneWidget);
-    expect(tester.widget<SwitchListTile>(_betaSwitch).value, isFalse);
+    expect(tester.widget<SwitchListTile>(_currentBetaSwitch()).value, isFalse);
     _expectCountdown(tester, 10);
     await tester.pump(const Duration(milliseconds: 9999));
     _expectCountdown(tester, 1);
     await tester.pump(const Duration(milliseconds: 1));
     expect(tester.widget<FilledButton>(_confirm).onPressed, isNotNull);
-    expect(tester.widget<SwitchListTile>(_betaSwitch).value, isFalse);
+    expect(tester.widget<SwitchListTile>(_currentBetaSwitch()).value, isFalse);
     expect(find.byType(GalleryApp), findsNothing);
 
     await tester.tap(_confirm);
@@ -99,8 +103,8 @@ void main() {
     expect(created, 1);
 
     await openBetaSettings();
-    expect(tester.widget<SwitchListTile>(_betaSwitch).value, isTrue);
-    await tester.tap(_betaSwitch);
+    expect(tester.widget<SwitchListTile>(_currentBetaSwitch()).value, isTrue);
+    await tester.tap(_currentBetaSwitch());
     await tester.pumpAndSettle();
     expect(find.byType(TransitCardAnalyzerApp), findsOneWidget);
     expect(find.byType(GalleryApp), findsNothing);
@@ -108,7 +112,7 @@ void main() {
     expect(created, 2);
 
     await openBetaSettings();
-    await tester.tap(_betaSwitch);
+    await tester.tap(_currentBetaSwitch());
     await tester.pumpAndSettle();
     expect(_warning, findsOneWidget);
     _expectCountdown(tester, 10);

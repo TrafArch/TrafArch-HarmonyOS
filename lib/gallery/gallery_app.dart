@@ -27,6 +27,8 @@ import '../features/transit_analysis/balance_interpretation.dart';
 import '../features/transit_analysis/tunion_analysis_models.dart';
 import '../features/trips/journey_transport_icon.dart';
 import '../features/trips/trip_filters.dart';
+import '../features/updates/update_prompt.dart';
+import '../features/updates/update_service.dart';
 import '../platform/browser/feedback_browser.dart';
 import '../platform/qr/qr_image_picker.dart';
 import '../platform/storage/archive_document_store.dart';
@@ -69,6 +71,8 @@ class GalleryApp extends StatefulWidget {
   const GalleryApp({
     super.key,
     this.controller,
+    this.updates,
+    this.claimStartupUpdatePrompt,
     this.onDisableBeta,
     this.openWebLink,
     this.openEmail,
@@ -77,6 +81,8 @@ class GalleryApp extends StatefulWidget {
     this.loadKnowledgeIndex = GalleryKnowledgeIndex.load,
   });
   final GalleryController? controller;
+  final UpdateService? updates;
+  final bool Function()? claimStartupUpdatePrompt;
   final VoidCallback? onDisableBeta;
   final Future<void> Function(Uri)? openWebLink;
   final Future<bool> Function(String)? openEmail;
@@ -152,6 +158,18 @@ class _GalleryAppState extends State<GalleryApp> {
           // Monet follows the home card. Until a newly chosen photo has been
           // sampled, use the user's preset instead of flashing an old theme.
           final monetSeed = c.monet && c.hasCardSeed ? c.themeSeed : null;
+          final home = _GalleryNavigator(
+            key: ValueKey(c.generation),
+            controller: c,
+            preferences: _preferences,
+            loadKnowledge: _loadKnowledge,
+            onDisableBeta: widget.onDisableBeta,
+            openWebLink: widget.openWebLink,
+            openEmail: widget.openEmail,
+            livePageBuilders: widget.livePageBuilders,
+          );
+          final updates = widget.updates;
+          final claimStartupUpdate = widget.claimStartupUpdatePrompt;
           return MaterialApp(
             title: 'TrafArch',
             debugShowCheckedModeBanner: false,
@@ -193,16 +211,13 @@ class _GalleryAppState extends State<GalleryApp> {
                 ),
               );
             },
-            home: _GalleryNavigator(
-              key: ValueKey(c.generation),
-              controller: c,
-              preferences: _preferences,
-              loadKnowledge: _loadKnowledge,
-              onDisableBeta: widget.onDisableBeta,
-              openWebLink: widget.openWebLink,
-              openEmail: widget.openEmail,
-              livePageBuilders: widget.livePageBuilders,
-            ),
+            home: updates != null && claimStartupUpdate != null
+                ? UpdatePrompt(
+                    service: updates,
+                    shouldShow: claimStartupUpdate,
+                    child: home,
+                  )
+                : home,
           );
         },
       );

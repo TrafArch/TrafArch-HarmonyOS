@@ -109,13 +109,13 @@ class _SettingsPageState extends State<SettingsPage> {
     final String logStatus;
     final Color logStatusColor;
     if (app.exportingLog) {
-      logStatus = '正在导出到下载目录…';
+      logStatus = '正在导出…';
       logStatusColor = scheme.outline;
     } else if (app.logExportMessage != null) {
       logStatus = app.logExportMessage!;
       logStatusColor = app.logExportFailed ? scheme.error : scheme.primary;
     } else {
-      logStatus = '选择读取记录，导出 JSON 到手机「下载」目录';
+      logStatus = '选择读取记录和 JSON 保存位置';
       logStatusColor = scheme.outline;
     }
     Widget section(String title, List<Widget> children) {

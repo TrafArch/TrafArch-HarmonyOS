@@ -8,9 +8,11 @@ import '../features/archive/domain/card_session_snapshot.dart';
 import '../features/archive/domain/card_types.dart';
 import '../features/transit_analysis/shanghai_balance_display.dart';
 import '../features/transit_analysis/tunion_analysis_models.dart';
+import '../gallery/gallery_balance_presentation.dart';
 import '../gallery/gallery_controller.dart';
 import '../gallery/gallery_data.dart';
 import '../platform/nfc/nfc_models.dart';
+import '../protocols/transit/multiapp/application_evidence.dart';
 import 'app_dependencies.dart';
 
 class HarmonyGalleryController extends GalleryController {
@@ -36,6 +38,7 @@ class HarmonyGalleryController extends GalleryController {
   NfcScanResult? _tag;
   List<SavedCard> _archive = const [];
   final Map<String, List<GalleryRecord>> _ledgers = {};
+  final Map<String, Set<String>> _confirmedApplications = {};
   StreamSubscription<List<SavedCard>>? _archiveStream;
   Future<void>? _ready;
   String? _fingerprint;
@@ -119,11 +122,24 @@ class HarmonyGalleryController extends GalleryController {
   void _setArchive(List<SavedCard> items) {
     _archive = items;
     _ledgers.clear();
+    _confirmedApplications.clear();
     for (final item in items) {
       final json = item.sessionDataJson;
       final snapshot = json == null ? null : CardSessionSnapshot.decode(json);
       if (snapshot != null) {
         _ledgers[item.id] = _projectTrips(snapshot.trips, snapshot.context);
+        final evidence = snapshot.extensions['applicationEvidence'];
+        if (evidence is List) {
+          final confirmed = {
+            for (final raw in evidence)
+              if (ApplicationEvidence.tryParse(raw) case final application?
+                  when application.confirmed)
+                application.appId,
+          };
+          if (confirmed.isNotEmpty) {
+            _confirmedApplications[item.id] = confirmed;
+          }
+        }
       }
     }
   }
@@ -139,6 +155,7 @@ class HarmonyGalleryController extends GalleryController {
         _card(
           id: item.id,
           name: item.displayName,
+          officialName: item.officialName,
           number: item.cardNumber,
           city: item.cityName,
           cardType: item.cardType,
@@ -153,6 +170,7 @@ class HarmonyGalleryController extends GalleryController {
               : DateTime.fromMillisecondsSinceEpoch(item.lastReadAt!),
           count: item.transactionCount,
           saved: true,
+          confirmedApplications: _confirmedApplications[item.id] ?? const {},
         ),
     ];
   }
@@ -185,10 +203,19 @@ class HarmonyGalleryController extends GalleryController {
       }
       _tag = tag;
       _fingerprint = capture?.fingerprint;
-      final currency = verifiedBalance != null ? 'HKD' : capture?.currencyCode;
+      final observedBalance =
+          GalleryBalancePresentation.observedCardBalanceMinor(app.parsedCard);
+      final currency = verifiedBalance != null
+          ? 'HKD'
+          : capture?.currencyCode ??
+                app.parsedCard?.localCard?.info.currencyCode;
       final amount =
           verifiedBalance?.balanceMinor ??
-          app.balanceDisplay.balanceFen(capture?.balanceFen);
+          app.balanceDisplay.balanceFen(observedBalance ?? capture?.balanceFen);
+      final confirmedApplications = {
+        for (final application in app.applications)
+          if (application.confirmed) application.appId,
+      };
       _current = _card(
         id: 'live-${tag.sessionId ?? attempt}',
         name:
@@ -196,6 +223,7 @@ class HarmonyGalleryController extends GalleryController {
             app.lastIdentified?.displayName ??
             app.parsedCard?.parserName ??
             'NFC 卡片',
+        officialName: capture?.identity.officialName,
         number: capture?.cardNumber,
         city: capture?.identity.cityName,
         cardType: capture?.identity.cardType,
@@ -205,6 +233,7 @@ class HarmonyGalleryController extends GalleryController {
         count: capture?.transactionCount,
         tunion: app.tunionDetected,
         cityUnion: app.cityUnionDetected || app.dualApplicationDetected,
+        confirmedApplications: confirmedApplications,
       );
       _readNotice = app.error ?? app.octopusReadNotice;
       final payload = capture?.sessionDataJson;
@@ -305,10 +334,19 @@ class HarmonyGalleryController extends GalleryController {
       update(() {
         includeOverdraft = app.includeShanghaiOverdraft;
         if (_tag != null) {
+          final observedBalance =
+              GalleryBalancePresentation.observedCardBalanceMinor(
+                app.parsedCard,
+              );
           final amount =
               verified?.balanceMinor ??
-              app.balanceDisplay.balanceFen(capture?.balanceFen);
-          final currency = verified != null ? 'HKD' : capture?.currencyCode;
+              app.balanceDisplay.balanceFen(
+                observedBalance ?? capture?.balanceFen,
+              );
+          final currency = verified != null
+              ? 'HKD'
+              : capture?.currencyCode ??
+                    app.parsedCard?.localCard?.info.currencyCode;
           if (amount != null) {
             _current.rawBalance = _balanceText(amount, currency);
           }
@@ -396,6 +434,7 @@ class HarmonyGalleryController extends GalleryController {
   static GalleryCard _card({
     required String id,
     required String name,
+    String? officialName,
     String? number,
     String? city,
     String? cardType,
@@ -406,6 +445,7 @@ class HarmonyGalleryController extends GalleryController {
     bool saved = false,
     bool tunion = false,
     bool cityUnion = false,
+    Set<String> confirmedApplications = const {},
   }) {
     final local = readAt?.toLocal();
     final date = local == null
@@ -433,11 +473,33 @@ class HarmonyGalleryController extends GalleryController {
       applications: [
         if (tunion ||
             cardType == CardTypes.chinaTunion ||
-            cardType == CardTypes.shanghaiTransitUnion)
+            cardType == CardTypes.shanghaiTransitUnion ||
+            cardType == CardTypes.lingnanTunion ||
+            cardType == CardTypes.shenzhenTunion ||
+            cardType == CardTypes.beijingBmac ||
+            confirmedApplications.contains('tu'))
           'tu',
-        if (cityUnion || cardType == CardTypes.cityUnion) 'cu',
+        if (cityUnion ||
+            cardType == CardTypes.cityUnion ||
+            cardType == CardTypes.shanghaiTransitUnion)
+          'cu',
+        if (cardType == CardTypes.lingnanTong ||
+            cardType == CardTypes.lingnanTunion ||
+            confirmedApplications.contains('lingnan') ||
+            (cardType == CardTypes.localCard &&
+                officialName?.contains('岭南通') == true))
+          'lingnan',
+        if (cardType == CardTypes.shenzhenTunion ||
+            confirmedApplications.contains('shenzhen') ||
+            (cardType == CardTypes.localCard &&
+                officialName?.contains('深圳通') == true))
+          'shenzhen',
         if (cardType == CardTypes.suica) 'suica',
         if (cardType == CardTypes.octopusTunion || currency == 'HKD') 'octopus',
+        if (cardType == CardTypes.localCard &&
+            officialName?.contains('深圳通') != true &&
+            officialName?.contains('岭南通') != true)
+          'tu',
       ],
     );
   }

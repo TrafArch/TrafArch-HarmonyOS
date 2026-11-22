@@ -113,53 +113,70 @@ void main() {
     );
   });
 
-  testWidgets(
-    'detail face retains card number beside name, union mark and balance',
-    (tester) async {
-      c.openCard(c.current);
-      await mount(tester, width: 320);
-      for (final scale in [1.0, 2.0]) {
-        tester.platformDispatcher.textScaleFactorTestValue = scale;
-        await tester.pumpAndSettle();
-        final face = find.byKey(ValueKey('card-face-${c.current.id}'));
-        final texts = tester
-            .widgetList<Text>(
-              find.descendant(of: face, matching: find.byType(Text)),
-            )
-            .map((w) => w.data)
-            .toList();
-        expect(texts, [
-          c.current.name,
-          'CNY ¥',
-          GalleryBalancePresentation.parse(
-            c.current.balance(c.includeOverdraft),
-            currencyCode: 'CNY',
-          ).number,
-          '**** ${c.current.tail}',
-        ]);
-        final title = tester.getRect(
-          find.byKey(ValueKey('face-title-${c.current.id}')),
-        );
-        final number = tester.getRect(
-          find.byKey(ValueKey('face-tail-${c.current.id}')),
-        );
-        expect(number.top, greaterThan(title.bottom));
-        expect(
-          find.descendant(of: face, matching: find.byType(SvgPicture)),
-          findsOneWidget,
-        );
-        final cityUnion = tester.widget<Image>(
-          find.byKey(ValueKey('detail-face-cu-${c.current.id}')),
-        );
-        expect(
-          cityUnion.image,
-          const AssetImage('assets/gallery/city-union-logo.png'),
-        );
-        expect(tester.takeException(), isNull);
-      }
-      tester.platformDispatcher.clearTextScaleFactorTestValue();
-    },
-  );
+  testWidgets('detail face mirrors the home card field positions', (
+    tester,
+  ) async {
+    c.openCard(c.current);
+    await mount(tester, width: 320);
+    for (final scale in [1.0, 2.0]) {
+      tester.platformDispatcher.textScaleFactorTestValue = scale;
+      await tester.pumpAndSettle();
+      final face = find.byKey(ValueKey('card-face-${c.current.id}'));
+      final texts = tester
+          .widgetList<Text>(
+            find.descendant(of: face, matching: find.byType(Text)),
+          )
+          .map((w) => w.data)
+          .toList();
+      expect(texts, [
+        c.current.name,
+        'CN ¥',
+        GalleryBalancePresentation.parse(
+          c.current.balance(c.includeOverdraft),
+          currencyCode: 'CNY',
+        ).number,
+        '3100 0000 0000 6821',
+      ]);
+      final title = tester.getRect(
+        find.byKey(ValueKey('face-title-${c.current.id}')),
+      );
+      final currency = tester.getRect(
+        find.byKey(ValueKey('face-currency-${c.current.id}')),
+      );
+      final balance = tester.getRect(
+        find.byKey(ValueKey('face-number-${c.current.id}')),
+      );
+      final number = tester.getRect(
+        find.byKey(ValueKey('face-card-number-${c.current.id}')),
+      );
+      final brand = tester.getRect(
+        find.byKey(ValueKey('detail-face-brand-${c.current.id}')),
+      );
+      final faceRect = tester.getRect(face);
+      expect(title.left, closeTo(faceRect.left + 20, 1.5));
+      expect(title.top, closeTo(faceRect.top + 20, 1.5));
+      expect(currency.left, closeTo(title.left, 1.5));
+      expect(number.left, closeTo(title.left, 1.5));
+      expect(number.top, greaterThan(title.bottom));
+      expect(balance.bottom + 4, closeTo(number.top, 1.5));
+      expect(number.bottom, closeTo(faceRect.bottom - 20, 1.5));
+      expect(brand.right, closeTo(faceRect.right - 20, 1.5));
+      expect(brand.bottom, closeTo(number.bottom, 1.5));
+      expect(
+        find.descendant(of: face, matching: find.byType(SvgPicture)),
+        findsOneWidget,
+      );
+      final cityUnion = tester.widget<Image>(
+        find.byKey(ValueKey('detail-face-cu-${c.current.id}')),
+      );
+      expect(
+        cityUnion.image,
+        const AssetImage('assets/gallery/city-union-logo.png'),
+      );
+      expect(tester.takeException(), isNull);
+    }
+    tester.platformDispatcher.clearTextScaleFactorTestValue();
+  });
 
   testWidgets(
     'short ledger still contracts to the capsule by riding content up',

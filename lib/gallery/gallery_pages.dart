@@ -1394,7 +1394,7 @@ extension _GalleryPages on _GalleryViewState {
                     subtitle: liveApp == null
                         ? '预览模拟日志，不保存文件'
                         : liveApp.exportingLog
-                        ? '正在导出到下载目录…'
+                        ? '正在导出…'
                         : liveApp.logExportMessage ?? '选择读取会话并导出到本机',
                     icon: Icons.download_outlined,
                   ),
@@ -1419,7 +1419,7 @@ extension _GalleryPages on _GalleryViewState {
       _panel(
         Column(
           children: [
-            _aboutHero(),
+            _aboutHero(liveApp?.updates),
             const Divider(),
             _settingRow(
               '致谢',
@@ -1462,13 +1462,15 @@ extension _GalleryPages on _GalleryViewState {
         align: TextAlign.center,
       ),
       if (widget.onDisableBeta != null) ...[
-        _sectionTitle('预览'),
+        _sectionTitle('备用界面'),
         _panel(
           _switch(
-            '启用新界面（beta）',
+            '使用 2.x 主界面',
             true,
             (_) => widget.onDisableBeta!(),
-            subtitle: '使用模拟数据；关闭后返回现有界面',
+            subtitle: liveApp == null
+                ? '关闭后进入 1.x 备用界面。'
+                : '关闭后切换到 1.x 备用界面，重启后会恢复 2.x。',
           ),
           padding: EdgeInsets.zero,
         ),
@@ -1556,11 +1558,12 @@ extension _GalleryPages on _GalleryViewState {
     } catch (error) {
       if (!mounted) return;
       _toast(
-        '导入失败：${error is FormatException
-            ? error.message
-            : error is StateError
-            ? error.message
-            : '请重试。'}',
+        '导入失败：${switch (error) {
+          FormatException() => error.message,
+          PlatformException() => error.message ?? '请重试。',
+          StateError() => error.message,
+          _ => '请重试。',
+        }}',
         type: GalleryFeedbackType.error,
       );
     }
@@ -1596,7 +1599,7 @@ extension _GalleryPages on _GalleryViewState {
     onTap: onTap,
   );
 
-  Widget _aboutHero() => Padding(
+  Widget _aboutHero(UpdateService? updates) => Padding(
     padding: const EdgeInsets.fromLTRB(16, 22, 16, 18),
     child: Column(
       children: [
@@ -1616,6 +1619,18 @@ extension _GalleryPages on _GalleryViewState {
           role: GalleryTypography.caption,
           color: t.muted,
         ),
+        if (updates != null && updates.isConfigured) ...[
+          _gap(12),
+          UpdateCheckButton(
+            service: updates,
+            onFeedback: (message, isError) => _toast(
+              message,
+              type: isError
+                  ? GalleryFeedbackType.error
+                  : GalleryFeedbackType.info,
+            ),
+          ),
+        ],
       ],
     ),
   );
