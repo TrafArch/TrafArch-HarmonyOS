@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -118,7 +116,7 @@ class _CardDetailPageState extends State<CardDetailPage> {
               if (history == null || history.missing) {
                 return const Center(child: Text('卡片不存在或已删除'));
               }
-              return _CardDetailBody(
+              return ArchiveDetailContent(
                 history: history,
                 repository: widget.repository,
                 includeShanghaiOverdraft:
@@ -133,16 +131,21 @@ class _CardDetailPageState extends State<CardDetailPage> {
   );
 }
 
-class _CardDetailBody extends StatelessWidget {
+enum ArchiveDetailSection { all, records, information }
+
+class ArchiveDetailContent extends StatelessWidget {
   final ArchiveHistoryResult history;
   final CardRepository repository;
   final bool includeShanghaiOverdraft;
   final Map<String, List<String>>? recoveryFilters;
-  const _CardDetailBody({
+  final ArchiveDetailSection section;
+  const ArchiveDetailContent({
+    super.key,
     required this.history,
     required this.repository,
     required this.includeShanghaiOverdraft,
     this.recoveryFilters,
+    this.section = ArchiveDetailSection.all,
   });
 
   @override
@@ -186,24 +189,7 @@ class _CardDetailBody extends StatelessWidget {
       batches: history.batches,
       includeShanghaiOverdraft: includeShanghaiOverdraft,
       cardType: history.card!.cardType,
-      onDiagnostics: (record) => _showEvidence(
-        context,
-        '诊断与原始证据',
-        const JsonEncoder.withIndent('  ').convert({
-          'context': record.context.toJson(),
-          'cardCityCode': record.cardCityCode,
-          'record': record.fields,
-          'sources': [
-            for (final source in record.sources)
-              {
-                'batchId': source.batchId,
-                'path': source.path,
-                'capturedParseVersion': source.capturedParseVersion,
-                'provenance': source.provenance,
-              },
-          ],
-        }),
-      ),
+      onDiagnostics: (record) => _showRecordSources(context, record.sources),
     );
     // 通用地方卡行程（武汉通 / 北京互通卡 / 深圳通本地 / 苏州苏薪·计次 /
     // 天府通）及岭南通 / 深圳通地方钱包与 TU / CU 共用票据式行程卡；
@@ -216,9 +202,8 @@ class _CardDetailBody extends StatelessWidget {
               record.cardType == 'shenzhenTong',
         )
         .toList();
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
-      children: [
+    final children = <Widget>[
+      if (section != ArchiveDetailSection.records)
         _ArchiveHeader(
           card: history.card!,
           recordCount: ArchiveRecordCount.fromHistory(history),
@@ -241,6 +226,7 @@ class _CardDetailBody extends StatelessWidget {
               ? '无法确认档案身份，暂不能编辑卡面编号；原始资料已保留。'
               : null,
         ),
+      if (section != ArchiveDetailSection.information) ...[
         const SizedBox(height: 12),
         Text(
           '${isAmusementIc ? '读取记录' : '行程记录'} · $readBatchCount 个已保存批次'
@@ -252,8 +238,8 @@ class _CardDetailBody extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: Text(
               summaryCount == 0
-                  ? '部分历史记录无法完整显示，已保留原始记录，可在批次诊断中查看。'
-                  : '部分历史记录无法完整显示，已保留原始记录，可在批次与摘要诊断中查看。',
+                  ? '部分历史记录无法完整显示，可在批次诊断中查看原因。'
+                  : '部分历史记录无法完整显示，可在批次与摘要诊断中查看原因。',
             ),
           ),
         const SizedBox(height: 8),
@@ -322,6 +308,8 @@ class _CardDetailBody extends StatelessWidget {
           const SizedBox(height: 12),
           ImportedArchiveRecords(records: history.importedRecords),
         ],
+      ],
+      if (section != ArchiveDetailSection.records) ...[
         const SizedBox(height: 16),
         TextButton.icon(
           onPressed: () => Navigator.of(context).push(
@@ -333,11 +321,19 @@ class _CardDetailBody extends StatelessWidget {
           label: Text(_archiveDiagnosticsTitle(history)),
         ),
       ],
-    );
+    ];
+    return section == ArchiveDetailSection.all
+        ? ListView(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
+            children: children,
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: children,
+          );
   }
 }
 
-/// Technical evidence is an explicit secondary route, never the trip tap.
 class _ArchiveDiagnosticsPage extends StatelessWidget {
   const _ArchiveDiagnosticsPage({required this.history});
   final ArchiveHistoryResult history;
@@ -351,32 +347,18 @@ class _ArchiveDiagnosticsPage extends StatelessWidget {
         child: ListView(
           children: [
             for (final batch in history.batches)
-              ExpansionTile(
+              ListTile(
                 title: Text(
                   '${batch.origin == 'imported_summary' ? '导入时保留的摘要' : '批次'}'
                   ' · ${batch.decoded.status.name}',
                 ),
                 subtitle: Text(
-                  '${batch.id}\n${batch.origin} · ${batch.timeSource}',
+                  [
+                    batch.id,
+                    '${batch.origin} · ${batch.timeSource}',
+                    for (final issue in batch.issues) issue.toString(),
+                  ].join('\n'),
                 ),
-                children: [
-                  for (final issue in batch.issues)
-                    ListTile(title: Text(issue.toString())),
-                  TextButton(
-                    onPressed: () => _showEvidence(
-                      context,
-                      batch.origin == 'imported_summary'
-                          ? '保留摘要中的原始快照'
-                          : '批次原文',
-                      batch.decoded.rawJson,
-                    ),
-                    child: Text(
-                      batch.origin == 'imported_summary'
-                          ? '查看摘要中的原始快照'
-                          : '查看完整原始快照',
-                    ),
-                  ),
-                ],
               ),
           ],
         ),
@@ -387,20 +369,34 @@ class _ArchiveDiagnosticsPage extends StatelessWidget {
 
 String _archiveDiagnosticsTitle(ArchiveHistoryResult history) =>
     history.batches.any((batch) => batch.origin == 'imported_summary')
-    ? '批次、摘要与原始快照'
-    : '批次诊断与原始快照';
+    ? '批次与摘要诊断'
+    : '批次诊断';
 
-void _showEvidence(BuildContext context, String title, String raw) {
+void _showRecordSources(
+  BuildContext context,
+  List<ArchiveRecordSource> sources,
+) {
   showDialog<void>(
     context: context,
     anchorPoint: (context.findRenderObject() as RenderBox?)?.localToGlobal(
       Offset.zero,
     ),
     builder: (context) => AlertDialog(
-      title: Text(title),
+      title: const Text('记录来源'),
       content: SizedBox(
         width: double.maxFinite,
-        child: SingleChildScrollView(child: SelectableText(raw)),
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final source in sources)
+              ListTile(
+                title: Text(source.path),
+                subtitle: Text(
+                  '批次 ${source.batchId}\n解析版本 ${source.capturedParseVersion}',
+                ),
+              ),
+          ],
+        ),
       ),
       actions: [
         TextButton(
@@ -652,9 +648,15 @@ class _ArchiveHeader extends StatelessWidget {
       ),
     );
     if (name == null) return;
-    await repository.renameCard(card.id, name);
-    if (messenger.mounted) {
-      messenger.showSnackBar(const SnackBar(content: Text('已更新卡片名称')));
+    try {
+      await repository.renameCard(card.id, name);
+      if (messenger.mounted) {
+        messenger.showSnackBar(const SnackBar(content: Text('已更新卡片名称')));
+      }
+    } catch (_) {
+      if (messenger.mounted) {
+        messenger.showSnackBar(const SnackBar(content: Text('名称未保存，请重试。')));
+      }
     }
   }
 }

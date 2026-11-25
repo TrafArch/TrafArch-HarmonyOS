@@ -41,7 +41,7 @@ void main() {
       expect(kb.cities.lookup('1210')!.name, contains('石家庄'));
       expect(kb.cuCities!.lookup('1210')!.name, contains('锦州'));
       expect(kb.cuRepository!.busRouteCount, 13852);
-      expect(kb.tuStations!.stationCount, 8069);
+      expect(kb.tuStations!.stationCount, 8119);
       expect(kb.cities.lookup('5210')!.name, '武汉');
       expect(kb.cities.lookup('5840')!.name, '深圳');
       final package = await ReferencePackage.open('CU', bundle: rootBundle);
@@ -209,13 +209,13 @@ void main() {
       try {
         expect(
           package.hash,
-          '517c59f3596c06a6ccff40752e7cf39db1bc2b2a76bd74d13d2381ab7ada6c53',
+          'c5fabb5524e8d64aa815b24e0868d4de1fbe54c488a778915d06616d3829b151',
         );
         expect(
           package.db
               .select('SELECT COUNT(*) AS c FROM all_records')
               .single['c'],
-          8069,
+          8119,
         );
         expect(
           File('${cache.path}/tu-${package.hash}.sqlite').existsSync(),
@@ -334,6 +334,27 @@ void main() {
     },
   );
 
+  test(
+    'physical release precedes the completion and archive callback',
+    () async {
+      final channel = _Sessions();
+      final scan = _scan(channel, _Coordinator());
+      addTearDown(scan.dispose);
+      final releasedAtPublication = <String>[];
+      scan.onCompleted = (_, id, _, isCurrent) async {
+        expect(isCurrent(), isTrue);
+        releasedAtPublication.addAll(channel.closed);
+      };
+      final pending = scan.scanOnce();
+      final id = channel.pending.keys.single;
+      channel.pending[id]!.complete(_tag(id));
+      await pending;
+      expect(releasedAtPublication, [id]);
+      await scan.stop();
+      expect(channel.closed, [id]);
+    },
+  );
+
   test('mismatched echoed session is rejected before parsing', () async {
     final channel = _Sessions();
     final coordinator = _Coordinator();
@@ -344,13 +365,84 @@ void main() {
     await pending;
     expect(scan.phase, ScanPhase.failed);
     expect(scan.error, contains('STALE_SESSION'));
+    scan.adapterEnabled();
+    expect(scan.phase, ScanPhase.failed);
+    expect(scan.error, contains('STALE_SESSION'));
     expect(coordinator.reads, 0);
   });
+
+  for (final code in ['NFC_DISABLED', 'NFC_UNAVAILABLE']) {
+    test(
+      '$code before native registration leaves no connection to close',
+      () async {
+        final channel = _Sessions()
+          ..closeFailure = PlatformException(code: 'STALE_SESSION');
+        final scan = _scan(channel, _Coordinator());
+        addTearDown(scan.dispose);
+        final pending = scan.scanOnce();
+        channel.pending.values.single.completeError(
+          PlatformException(code: code),
+        );
+        await pending;
+        expect(scan.error, code);
+        expect(scan.releaseError, isNull);
+        scan.adapterEnabled();
+        expect(scan.phase, ScanPhase.idle);
+        expect(scan.error, isNull);
+        await scan.stop();
+        expect(scan.releaseError, isNull);
+        expect(channel.closed, isEmpty);
+      },
+    );
+  }
+
+  test(
+    'late start rejection clears a concurrent stop of the unknown ID',
+    () async {
+      final channel = _Sessions()
+        ..closeFailure = PlatformException(code: 'STALE_SESSION');
+      final scan = _scan(channel, _Coordinator());
+      addTearDown(scan.dispose);
+      final pending = scan.scanOnce();
+      final stopping = scan.stop();
+      channel.pending.values.single.completeError(
+        PlatformException(code: 'NFC_DISABLED'),
+      );
+      await Future.wait([pending, stopping]);
+      expect(scan.releaseError, isNull);
+      expect(scan.scanning, isFalse);
+    },
+  );
+
+  test(
+    'adapter disabled after session registration still requires physical close',
+    () async {
+      final channel = _Sessions()
+        ..closeFailure = PlatformException(code: 'NFC_CLOSE_FAILED');
+      final scan = _scan(channel, _Coordinator());
+      addTearDown(scan.dispose);
+      final pending = scan.scanOnce();
+      final id = channel.pending.keys.single;
+      channel.pending[id]!.completeError(
+        PlatformException(code: 'NFC_DISABLED', details: {'sessionId': id}),
+      );
+      await pending;
+      expect(channel.closed, [id]);
+      expect(scan.releaseError, contains('NFC_CLOSE_FAILED'));
+      scan.adapterEnabled();
+      expect(scan.error, isNull);
+      expect(scan.releaseError, contains('NFC_CLOSE_FAILED'));
+      channel.closeFailure = null;
+      await scan.stop();
+      expect(channel.closed, [id, id]);
+      expect(scan.releaseError, isNull);
+    },
+  );
 
   test(
     'release failure remains visible after otherwise successful parsing',
     () async {
-      final channel = _Sessions()..closeFails = true;
+      final channel = _Sessions()..closeFailure = StateError('release failed');
       final scan = _scan(channel, _Coordinator());
       addTearDown(scan.dispose);
       final pending = scan.scanOnce();
@@ -381,14 +473,14 @@ NfcScanResult _tag(String id) => NfcScanResult(
 class _Sessions implements SessionNfcChannel {
   final pending = <String, Completer<NfcScanResult?>>{};
   final closed = <String>[];
-  bool closeFails = false;
+  Object? closeFailure;
   @override
   Future<NfcScanResult?> scanSession(String sessionId) =>
       (pending[sessionId] = Completer<NfcScanResult?>()).future;
   @override
   Future<void> closeSession(String sessionId) async {
     closed.add(sessionId);
-    if (closeFails) throw StateError('release failed');
+    if (closeFailure case final failure?) throw failure;
   }
 
   @override

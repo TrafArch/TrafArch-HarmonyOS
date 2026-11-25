@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:transit_card_analyzer/app/app_dependencies.dart';
 import 'package:transit_card_analyzer/app/navigation/app_shell.dart';
@@ -10,8 +11,11 @@ import 'package:transit_card_analyzer/features/settings/presentation/settings_pa
 import 'package:transit_card_analyzer/features/archive/domain/card_archive_identity.dart';
 import 'package:transit_card_analyzer/features/archive/domain/card_session_snapshot.dart';
 import 'package:transit_card_analyzer/features/archive/domain/pending_card_save.dart';
+import 'package:transit_card_analyzer/features/expert/expert_page.dart';
+import 'package:transit_card_analyzer/features/home/home_page.dart';
 import 'package:transit_card_analyzer/features/recovery/recovery_state.dart';
 import 'package:transit_card_analyzer/features/recovery/recovery_result_panel.dart';
+import 'package:transit_card_analyzer/features/trips/trips_page.dart';
 import 'package:transit_card_analyzer/platform/memory/memory_platform.dart';
 import 'package:transit_card_analyzer/platform/nfc/nfc_models.dart';
 import 'package:transit_card_analyzer/platform/nfc/nfc_service.dart';
@@ -20,6 +24,7 @@ import 'package:transit_card_analyzer/platform/storage/settings_store.dart';
 import 'package:transit_card_analyzer/protocols/transit/card_parser.dart';
 import 'package:transit_card_analyzer/protocols/transit/tunion/tunion_models.dart';
 import 'package:transit_card_analyzer/features/scan/domain/card_read_outcome.dart';
+import 'package:transit_card_analyzer/gallery/gallery_app.dart';
 
 import 'support/test_database.dart';
 
@@ -95,6 +100,42 @@ void main() {
     await reading;
     expect(app.lastResult, isNull);
   });
+
+  testWidgets(
+    '2.x restores frozen read on all three surfaces without NFC or auto-save',
+    (tester) async {
+      tester.view.physicalSize = const Size(412, 892);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final state = _state();
+      final memory = _Memory()..text = state.encode();
+      final nfc = _Nfc();
+      final app = appFor(
+        memory,
+        nfc: nfc,
+        settings: MemorySettingsStore({SettingsKeys.autoSaveEnabled: 'true'}),
+      );
+      await tester.runAsync(app.init);
+      await tester.pumpWidget(GalleryApp(liveApp: app));
+      await tester.pumpAndSettle();
+      expect(app.recoveryTab, 1);
+      expect(find.text('测试交通卡'), findsWidgets);
+      expect(find.text('保存卡片'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('nav-expert')));
+      await tester.pumpAndSettle();
+      expect(app.recoveryTab, 3);
+      expect(find.text('测试交通卡'), findsWidgets);
+      await tester.tap(find.byKey(const ValueKey('nav-home')));
+      await tester.pumpAndSettle();
+      expect(find.text('保存卡片'), findsOneWidget);
+      expect(app.recoveredCapture!.snapshotJson, state.capture!.snapshotJson);
+      expect(app.pendingCardSave, isNull);
+      expect(await tester.runAsync(app.cardRepository.getAllCards), isEmpty);
+      expect(nfc.scans, 0);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    },
+  );
 
   test('TRIM keeps current evidence and unsaved capture', () async {
     final memory = _Memory()..text = _state().encode();
@@ -278,12 +319,39 @@ void main() {
     },
   );
 
-  test('未接入系统恢复时不读取或写入恢复现场', () async {
-    final bridge = MemoryPlatform.create();
+  test('Android bridge rejects stale and malformed notices before business handling', () async {
+    final bridge = AndroidMemoryPlatform();
+    var calls = 0;
+    bridge.listen((kill) async {
+      calls++;
+      return kill;
+    });
     addTearDown(bridge.dispose);
-    expect(await bridge.readRecovery(), isNull);
-    await expectLater(bridge.writeRecovery('{}'), throwsUnsupportedError);
-    await bridge.clearRecovery();
+    const codec = StandardMethodCodec();
+    Future<Object?> send(Object? args) async {
+      final reply = Completer<ByteData?>();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .handlePlatformMessage(
+            AndroidMemoryPlatform.channel.name,
+            codec.encodeMethodCall(MethodCall('onMemoryPressure', args)),
+            reply.complete,
+          );
+      return codec.decodeEnvelope((await reply.future)!);
+    }
+
+    expect(await send({'kill': true, 'expiresAtMillis': 0}), isFalse);
+    expect(await send({'kill': 'true'}), isFalse);
+    expect(calls, 0);
+    expect(
+      await send({
+        'kill': true,
+        'expiresAtMillis': DateTime.now()
+            .add(const Duration(seconds: 2))
+            .millisecondsSinceEpoch,
+      }),
+      isTrue,
+    );
+    expect(calls, 1);
   });
 
   testWidgets(
@@ -310,7 +378,66 @@ void main() {
     },
   );
 
-  testWidgets('legacy recovery exposes bank capture only as raw evidence', (
+  for (final (heading, fields) in const [
+    (
+      '逐应用探测 · 捕获时快照',
+      {
+        'applications': [
+          {
+            'appId': 'cu',
+            'displayName': '城市一卡通',
+            'state': 'readSucceeded',
+            'probed': true,
+            'confirmed': true,
+            'readSucceeded': true,
+          },
+        ],
+      },
+    ),
+    (
+      'FeliCa 8008 · 八达通',
+      {
+        'decoded': {
+          'systemResults': {
+            '8008': {'displayName': '八达通', 'idm': '0808080808080808'},
+          },
+        },
+      },
+    ),
+  ]) {
+    testWidgets('恢复现场的 $heading 只在专家页面展示', (tester) async {
+      final app = appFor(_Memory());
+      app.recoveredCapture = RecoveryCapture(
+        readAt: DateTime(2026, 11, 24),
+        summary: {'cardName': '恢复的交通卡', ...fields},
+        frames: const [],
+      );
+      for (final page in [
+        HomePage(app: app, active: false),
+        TripsPage(app: app),
+        ExpertPage(app: app),
+      ]) {
+        await tester.pumpWidget(MaterialApp(home: Scaffold(body: page)));
+        expect(find.text('恢复的交通卡'), findsOneWidget);
+        expect(
+          find.text(heading),
+          page is ExpertPage ? findsOneWidget : findsNothing,
+        );
+        expect(find.text('查看上次读取的原始数据'), findsNothing);
+        expect(find.text('读取时的完整字段'), findsNothing);
+        if (page is ExpertPage && heading.startsWith('FeliCa')) {
+          expect(find.textContaining('IDm 0808080808080808'), findsOneWidget);
+          await tester.tap(find.text(heading));
+          await tester.pumpAndSettle();
+          expect(find.text('上次读取的原始数据'), findsNothing);
+          expect(find.text(heading), findsOneWidget);
+        }
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  testWidgets('legacy recovery retains captured bytes without a JSON viewer', (
     tester,
   ) async {
     const label = '旧版测试应用';
@@ -349,10 +476,7 @@ void main() {
     expect(find.text(number), findsNothing);
     expect(find.text('读取时的完整字段'), findsNothing);
 
-    await tester.tap(find.text('查看上次读取的原始数据'));
-    await tester.pumpAndSettle();
-    final raw = tester.widget<SelectableText>(find.byType(SelectableText));
-    expect(jsonDecode(raw.data!), capture.toJson());
+    expect(find.text('查看上次读取的原始数据'), findsNothing);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 }

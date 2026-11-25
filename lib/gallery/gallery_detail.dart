@@ -19,176 +19,123 @@ extension _GalleryDetail on _GalleryViewState {
     final card = _selectedCard;
     final ledger = c.ledger(card);
     final body = switch (c.detailTab) {
-      1 when c.isLive => [_empty('消费统计尚未接入', '可先查看已保存的交易明细。')],
       1 => _spendingChildren(card),
-      2 => _cardInformation(card),
+      2 => [_cardInformation(card)],
       _ => <Widget>[
-        if (ledger.isEmpty)
-          _empty('暂无交易记录', c.isLive ? '没有可展示的交易明细' : '卡内记录可能不完整'),
-        for (final record in ledger)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _sectionTitle(
-                record['date'] as String? ?? '日期未记录',
-                role: GalleryJourneyTypography.date,
-              ),
-              _panel(
-                _trip(record),
+        if (ledger.isEmpty) _empty('暂无交易记录', '卡内记录可能不完整'),
+        for (final group in _tripsByDate(ledger).entries) ...[
+          _tripDateHeading(group.key),
+          for (final (index, trip) in group.value.indexed) ...[
+            if (index > 0) _gap(8),
+            Builder(
+              builder: (_) => _panel(
+                _trip(trip),
                 padding: const EdgeInsets.symmetric(horizontal: 14),
               ),
-            ],
-          ),
+            ),
+          ],
+        ],
         _gap(16),
-        if (!c.isLive)
-          _text(
-            '仅展示样例中保留的记录，可能不代表完整历史。',
-            role: GalleryTypography.caption,
-            color: t.muted,
-          ),
+        _text(
+          '仅展示样例中保留的记录，可能不代表完整历史。',
+          role: GalleryTypography.caption,
+          color: t.muted,
+        ),
       ],
     };
     const navHeight = 56.0;
-    final renderedScrollDeficit = _detailScrollDeficit;
-    return NotificationListener<ScrollMetricsNotification>(
-      onNotification: (notification) {
-        // Short ledgers still collapse the face fully: pad the scroll range up
-        // to the shrink distance so the content can ride up. Tie the correction
-        // to the padding that produced these metrics: a deferred callback must
-        // not apply the same shortfall again to a newer, unrendered deficit.
-        _detailMaxExtent = notification.metrics.maxScrollExtent;
-        final target = math.max(
-          0.0,
-          renderedScrollDeficit + (_detailShrinkDistance - _detailMaxExtent),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = math.max(1.0, constraints.maxWidth - 32);
+        final layout = _DetailCardLayout(
+          context,
+          card,
+          _balancePresentation(card),
+          width,
         );
-        if ((target - _detailScrollDeficit).abs() > .5) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            if ((target - _detailScrollDeficit).abs() > .5) {
-              _updateDetail(() => _detailScrollDeficit = target);
-            }
-          });
-        }
-        return false;
-      },
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final width = math.max(1.0, constraints.maxWidth - 32);
-          final layout = _DetailCardLayout(
-            context,
-            card,
-            _balancePresentation(card),
-            width,
-          );
-          final tabsHeight = math.max(
-            54.0,
-            MediaQuery.textScalerOf(context).scale(18) + 26,
-          );
-          final metadata = '${card.city} · 尾号 ${card.tail}   上次读取 ${card.when}';
-          final metadataHeight =
-              _measureDetailText(
-                context,
-                metadata,
-                GalleryTypography.caption,
-                width,
-              ).height +
-              16;
-          _detailShrinkDistance = layout.expandedHeight + metadataHeight;
-          return CustomScrollView(
-            key: PageStorageKey('gallery-${c.generation}-detail-${card.id}'),
-            slivers: [
-              SliverPadding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                sliver: SliverPersistentHeader(
-                  pinned: true,
-                  delegate: _TripsSummaryDelegate(
-                    expandedHeight:
-                        navHeight +
-                        layout.expandedHeight +
-                        metadataHeight +
-                        tabsHeight +
-                        24,
-                    compactHeight: navHeight + tabsHeight + 24,
-                    builder: (progress) => ColoredBox(
-                      key: const ValueKey('detail-pinned-header'),
-                      color: t.bg,
-                      child: Column(
-                        children: [
-                          _detailNav(progress, card, navHeight),
-                          SizedBox(
-                            height: _detailLerp(
-                              layout.expandedHeight,
-                              0,
-                              progress,
-                            ),
-                            child: ClipRect(
-                              child: Opacity(
-                                opacity: (1 - progress).clamp(0.0, 1.0),
-                                child: _GalleryDetailFace(
-                                  key: ValueKey('detail-face-${card.id}'),
-                                  card: card,
-                                  balance: _balancePresentation(card),
-                                  layout: layout,
-                                ),
+        final tabsHeight = math.max(
+          54.0,
+          MediaQuery.textScalerOf(context).scale(18) + 26,
+        );
+        return CustomScrollView(
+          key: PageStorageKey('gallery-${c.generation}-detail-${card.id}'),
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              sliver: SliverPersistentHeader(
+                pinned: true,
+                delegate: _GalleryCollapsingHeaderDelegate(
+                  expandedHeight:
+                      navHeight + layout.expandedHeight + tabsHeight + 24,
+                  compactHeight: navHeight + tabsHeight + 24,
+                  builder: (progress) => ColoredBox(
+                    key: const ValueKey('detail-pinned-header'),
+                    color: t.bg,
+                    child: Column(
+                      children: [
+                        _detailNav(progress, card, navHeight),
+                        SizedBox(
+                          height: _detailLerp(
+                            layout.expandedHeight,
+                            0,
+                            progress,
+                          ),
+                          child: ClipRect(
+                            child: Opacity(
+                              opacity: (1 - progress).clamp(0.0, 1.0),
+                              child: _GalleryDetailFace(
+                                key: ValueKey('detail-face-${card.id}'),
+                                card: card,
+                                balance: _balancePresentation(card),
+                                layout: layout,
                               ),
                             ),
                           ),
-                          ClipRect(
-                            child: SizedBox(
-                              height: metadataHeight * (1 - progress),
-                              child: OverflowBox(
-                                alignment: Alignment.topLeft,
-                                minHeight: metadataHeight,
-                                maxHeight: metadataHeight,
-                                child: Opacity(
-                                  opacity: (1 - progress * 3).clamp(0.0, 1.0),
-                                  child: Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: _text(
-                                      metadata,
-                                      role: GalleryTypography.caption,
-                                      color: t.muted,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
+                        ),
+                        _gap(12),
+                        SizedBox(
+                          height: tabsHeight,
+                          child: _tabs(
+                            ['最近交易', '消费统计', '卡片信息'],
+                            c.detailTab,
+                            (index) => c.update(() => c.detailTab = index),
+                            id: 'detail-tabs',
                           ),
-                          _gap(12),
-                          SizedBox(
-                            height: tabsHeight,
-                            child: _tabs(
-                              ['最近交易', '消费统计', '卡片信息'],
-                              c.detailTab,
-                              (index) => c.update(() => c.detailTab = index),
-                              id: 'detail-tabs',
-                            ),
-                          ),
-                          _gap(12),
-                        ],
-                      ),
+                        ),
+                        _gap(12),
+                      ],
                     ),
                   ),
                 ),
               ),
-              SliverPadding(
-                padding: EdgeInsets.fromLTRB(
-                  16,
-                  4,
-                  16,
-                  30 +
-                      MediaQuery.paddingOf(context).bottom +
-                      _detailScrollDeficit,
-                ),
-                sliver: SliverList.builder(
-                  itemCount: body.length,
-                  itemBuilder: (_, index) => _detailSwipe(body[index]),
+            ),
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                4,
+                16,
+                30 + MediaQuery.paddingOf(context).bottom,
+              ),
+              sliver: SliverList.builder(
+                itemCount: body.length,
+                itemBuilder: (_, index) => _detailSwipe(body[index]),
+              ),
+            ),
+            SliverLayoutBuilder(
+              builder: (context, constraints) => SliverToBoxAdapter(
+                child: SizedBox(
+                  height: math.max(
+                    0.0,
+                    constraints.viewportMainAxisExtent +
+                        layout.expandedHeight -
+                        constraints.precedingScrollExtent,
+                  ),
                 ),
               ),
-            ],
-          );
-        },
-      ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -238,116 +185,95 @@ extension _GalleryDetail on _GalleryViewState {
               ),
             ),
           ),
-          if (!c.isLive)
-            _actionGroup('page', [
-              _menuAnchor(
-                'detail-card-${card.id}',
-                _icon(
-                  Icons.more_horiz_rounded,
-                  '${card.name} 管理',
-                  () => _openDropdown(
-                    GalleryOverlay.cardMenu,
-                    'detail-card-${card.id}',
-                    card: card,
-                  ),
-                  outlined: false,
-                  grouped: true,
-                ),
-              ),
+          _actionGroup('page', [
+            _menuAnchor(
+              'detail-card-${card.id}',
               _icon(
-                Icons.download_outlined,
-                '导出本卡记录',
-                () => c.export(),
+                Icons.more_horiz_rounded,
+                '${card.name} 管理',
+                () => _openDropdown(
+                  GalleryOverlay.cardMenu,
+                  'detail-card-${card.id}',
+                  card: card,
+                ),
                 outlined: false,
                 grouped: true,
-                color: t.text,
               ),
-            ]),
+            ),
+            _icon(
+              Icons.download_outlined,
+              '导出本卡记录',
+              () {
+                final live = _GalleryLiveScope.of(context);
+                if (live == null) {
+                  c.export();
+                  return;
+                }
+                final saved = live.savedCardFor(card.id);
+                if (saved != null) {
+                  unawaited(
+                    exportArchiveJson(
+                      context,
+                      live.app,
+                      card: saved,
+                      onNotice: (message, failed) => _toast(
+                        message,
+                        type: failed
+                            ? GalleryFeedbackType.error
+                            : GalleryFeedbackType.success,
+                      ),
+                    ),
+                  );
+                }
+              },
+              outlined: false,
+              grouped: true,
+              color: t.text,
+            ),
+          ]),
         ],
       ),
     );
   }
 
-  List<Widget> _cardInformation(GalleryCard card) {
-    final raw = c.data.raw[card.id];
-    return [
-      _panel(
-        Column(
-          children: [
-            for (final row in <(String, String)>[
-              ('完整卡号', card.pan),
-              ('发卡地', card.city),
-              ('卡种', card.type),
-              ('有效期', card.valid == '—' ? '未知' : '${card.valid}（未记录日）'),
-              ('当前余额', card.balance(c.includeOverdraft)),
-              ('最近读取', card.when),
-              if (!c.isLive)
-                ('协议', card.type == 'FeliCa' ? 'FeliCa' : 'ISO-DEP / 交通联合'),
-            ])
-              _kv(row.$1, row.$2),
-          ],
-        ),
-      ),
-      if (!c.isLive) ...[
-        Padding(
-          padding: const EdgeInsets.only(top: 16, bottom: 8),
-          child: Row(
-            key: const ValueKey('detail-raw-header'),
-            children: [
-              Expanded(child: _text('原始数据', role: GalleryTypography.section)),
-              if (raw is Map) ...[
-                _icon(
-                  Icons.copy_outlined,
-                  '复制原始数据',
-                  () {
-                    Clipboard.setData(
-                      ClipboardData(text: '${raw['sfi18']}\n${raw['sfi1e']}'),
-                    );
-                    _toast('已复制模拟原始数据');
-                  },
-                  outlined: false,
-                  grouped: true,
-                ),
-                _icon(
-                  Icons.feedback_outlined,
-                  '原始数据反馈预览',
-                  () => c.showOverlay(GalleryOverlay.rawFeedback),
-                  outlined: false,
-                  grouped: true,
-                ),
-              ],
-            ],
-          ),
-        ),
-        _text('模拟样例', role: GalleryTypography.caption, color: t.muted),
-        _gap(8),
-        if (raw is Map)
-          _hexBox('SFI 0x18\n${raw['sfi18']}\n\nSFI 0x1E\n${raw['sfi1e']}')
-        else
-          _text('本样例未保留原始数据', role: GalleryTypography.caption, color: t.muted),
+  Widget _cardInformation(GalleryCard card) => _panel(
+    Column(
+      children: [
+        for (final row in <(String, String)>[
+          ('完整卡号', card.pan),
+          ('发卡地', card.city),
+          ('卡种', card.type),
+          ('有效期', card.valid == '—' ? '未知' : '${card.valid}（未记录日）'),
+          ('当前余额', card.balance(c.includeOverdraft)),
+          ('最近读取', card.when),
+          ('协议', card.type),
+        ])
+          _kv(row.$1, row.$2),
       ],
-    ];
-  }
+    ),
+  );
 
-  Future<void> _selectSpendingPeriod(GallerySpendingPeriod period) async {
+  Future<void> _selectSpendingPeriod(
+    GallerySpendingPeriod period,
+    DateTime now,
+  ) async {
     if (period != GallerySpendingPeriod.custom) {
       _updateDetail(
         () => _spendingSelection = GallerySpendingSelection.forPeriod(
           period,
-          GalleryController.clock,
+          now,
         ),
       );
       return;
     }
-    final first =
-        _spendingSelection.start ?? galleryCalendarDay(GalleryController.clock);
+    final first = _spendingSelection.start ?? galleryCalendarDay(now);
     final last = _spendingSelection.end ?? first;
     final selected = await showDialog<DateTimeRange>(
       context: context,
       builder: (_) => _GalleryRangePickerDialog(
         initialStart: first,
         initialEnd: last,
-        today: GalleryController.clock,
+        today: now,
       ),
     );
     if (!mounted || selected == null) return;
@@ -362,7 +288,11 @@ extension _GalleryDetail on _GalleryViewState {
   String _spendingDate(DateTime date) =>
       '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
 
-  Widget _spendingPeriodButton(GallerySpendingPeriod period, String label) {
+  Widget _spendingPeriodButton(
+    GallerySpendingPeriod period,
+    String label,
+    DateTime now,
+  ) {
     final selected = _spendingSelection.period == period;
     return Semantics(
       button: true,
@@ -378,7 +308,7 @@ extension _GalleryDetail on _GalleryViewState {
           type: MaterialType.transparency,
           child: InkWell(
             borderRadius: BorderRadius.circular(20),
-            onTap: () => _selectSpendingPeriod(period),
+            onTap: () => _selectSpendingPeriod(period, now),
             child: SizedBox(
               height: 40,
               child: Center(
@@ -404,11 +334,27 @@ extension _GalleryDetail on _GalleryViewState {
   }
 
   List<Widget> _spendingChildren(GalleryCard card) {
-    final summary = GallerySpendingSummary(
-      card.currency,
-      c.ledger(card),
-      selection: _spendingSelection,
+    final live = _GalleryLiveScope.of(context);
+    final history = live?.historyFor(card.id);
+    return _spendingWidgets(
+      history == null
+          ? GallerySpendingSummary(
+              card.currency,
+              c.ledger(card),
+              selection: _spendingSelection,
+            )
+          : projectGalleryArchiveSpending(
+              history,
+              selection: _spendingSelection,
+            ),
+      now: live == null ? GalleryController.clock : DateTime.now(),
     );
+  }
+
+  List<Widget> _spendingWidgets(
+    GallerySpendingSummary summary, {
+    required DateTime now,
+  }) {
     final range = _spendingSelection.start == null
         ? '全部已保留记录'
         : '${_spendingDate(_spendingSelection.start!)} ～ ${_spendingDate(_spendingSelection.end!)}';
@@ -424,7 +370,7 @@ extension _GalleryDetail on _GalleryViewState {
             (GallerySpendingPeriod.custom, '自定义'),
           ].indexed) ...[
             if (index > 0) const SizedBox(width: 8),
-            Expanded(child: _spendingPeriodButton(period, label)),
+            Expanded(child: _spendingPeriodButton(period, label, now)),
           ],
         ],
       ),
@@ -730,10 +676,8 @@ extension _GalleryDetail on _GalleryViewState {
                                             ),
                                             duration: _reduceMotion
                                                 ? Duration.zero
-                                                : const Duration(
-                                                    milliseconds: 260,
-                                                  ),
-                                            curve: Curves.easeInOutCubic,
+                                                : _GalleryMotion.expand,
+                                            curve: _GalleryMotion.standard,
                                             builder: (_, value, _) => Container(
                                               height: math.max(
                                                 2,
@@ -790,10 +734,8 @@ extension _GalleryDetail on _GalleryViewState {
           begin: List.filled(3, 0),
           end: fractions,
         ),
-        duration: _reduceMotion
-            ? Duration.zero
-            : const Duration(milliseconds: 260),
-        curve: Curves.easeInOutCubic,
+        duration: _reduceMotion ? Duration.zero : _GalleryMotion.expand,
+        curve: _GalleryMotion.standard,
         builder: (_, values, child) => CustomPaint(
           painter: _SpendingRingPainter(values, colors, t.chartTrack),
           child: child,
@@ -919,8 +861,8 @@ class _DetailCardLayout {
   ) {
     final brands = _faceBrands(card);
     final titleStyle = GalleryTypography.card.copyWith(
-      fontSize: 16,
-      height: 23 / 16,
+      fontSize: 24,
+      height: 30 / 24,
     );
     final amountStyle = GalleryTypography.amount.copyWith(
       fontSize: 23,
@@ -1006,8 +948,8 @@ class _GalleryDetailFace extends StatelessWidget {
         ? face.foreground
         : GalleryCardFace.imageForeground;
     final nameStyle = GalleryTypography.card.copyWith(
-      fontSize: 16,
-      height: 23 / 16,
+      fontSize: 24,
+      height: 30 / 24,
       color: foreground,
     );
     final amountStyle = GalleryTypography.amount.copyWith(

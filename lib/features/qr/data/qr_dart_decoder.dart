@@ -6,7 +6,7 @@ import 'dart:ui' as ui;
 
 import 'package:zxing2/qrcode.dart';
 
-/// 纯 Dart 本地二维码解码结果。
+/// MLKit 无法识别或不可用时，相册导入使用的纯 Dart 本地解码结果。
 class QrDartDecode {
   const QrDartDecode(this.payload);
 
@@ -32,7 +32,22 @@ QrDartDecode? decodeQrFromRgba(Uint8List rgba, int width, int height) {
           (rgba[offset + 1] << 8) |
           rgba[offset + 2];
     }
-    return _decode(RGBLuminanceSource(width, height, pixels));
+    final source = RGBLuminanceSource(width, height, pixels);
+    final result = _tryDecode(source) ?? _tryDecode(source.invert());
+    if (result == null) return null;
+
+    // ZXing rawBytes contains QR codewords (mode/length/padding included).
+    // Transit payloads live in the decoded byte segments instead.
+    final byteSegments = result.resultMetadata[ResultMetadataType.byteSegments];
+    if (byteSegments is List<Int8List> && byteSegments.isNotEmpty) {
+      return QrDartDecode([
+        for (final segment in byteSegments)
+          for (final byte in segment) byte & 0xff,
+      ]);
+    }
+    final text = result.text;
+    if (text.isEmpty) return null;
+    return QrDartDecode(utf8.encode(text));
   } catch (_) {
     return null;
   }
@@ -50,8 +65,6 @@ QrDartDecode? _decode(LuminanceSource source) {
     final result = _tryDecode(source) ?? _tryDecode(source.invert());
     if (result == null) return null;
 
-    // ZXing rawBytes contains QR codewords (mode/length/padding included).
-    // Transit payloads live in the decoded byte segments instead.
     final byteSegments = result.resultMetadata[ResultMetadataType.byteSegments];
     if (byteSegments is List<Int8List> && byteSegments.isNotEmpty) {
       return QrDartDecode([
@@ -113,8 +126,8 @@ Future<List<int>?> decodeQrFromImageFile(String path) async {
     final longest = targetWidth > targetHeight ? targetWidth : targetHeight;
     if (longest > maxSide) {
       final scale = maxSide / longest;
-      targetWidth = (targetWidth * scale).round().clamp(1, maxSide);
-      targetHeight = (targetHeight * scale).round().clamp(1, maxSide);
+      targetWidth = (targetWidth * scale).round();
+      targetHeight = (targetHeight * scale).round();
     }
 
     codec = await descriptor.instantiateCodec(

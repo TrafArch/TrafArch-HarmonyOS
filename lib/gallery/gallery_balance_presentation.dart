@@ -19,7 +19,7 @@ class GalleryBalancePresentation {
     String? currencyCode,
   }) {
     final amount = RegExp(r'[-−+]?\d[\d,]*(?:\.\d+)?').firstMatch(original);
-    if (amount == null) {
+    if (amount == null || original.endsWith(' 次')) {
       return GalleryBalancePresentation._(
         known: false,
         currencyLabel: '',
@@ -110,9 +110,9 @@ class GalleryBalancePresentation {
     'MOP': '¥',
   };
 
-  /// Prefer a successfully observed local wallet over an absent TU balance.
+  /// Use the same primary wallet observation as the captured archive summary.
   static int? observedCardBalanceMinor(ParsedCard? card) =>
-      card?.localCard?.info.observedBalance ?? card?.info.balanceFen;
+      card?.primaryBalanceFen;
 
   /// Whether [number] contains an observed amount, including zero or negatives.
   final bool known;

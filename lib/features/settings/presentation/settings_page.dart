@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 import '../../../shared/presentation/adaptive_layout.dart';
@@ -10,7 +8,6 @@ import '../../../app/app_dependencies.dart';
 import '../../../app/beta_ui_scope.dart';
 import 'about_page.dart';
 import 'feedback_page.dart';
-import 'firebase_analytics_tile.dart';
 import 'diagnostic_export_dialog.dart';
 import '../../reference_data/presentation/knowledge_base_page.dart';
 
@@ -23,8 +20,6 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  bool _betaUiWarningOpen = false;
-
   @override
   void initState() {
     super.initState();
@@ -39,29 +34,6 @@ class _SettingsPageState extends State<SettingsPage> {
 
   void _onChanged() {
     if (mounted) setState(() {});
-  }
-
-  Future<void> _requestBetaUiChange(bool enabled) async {
-    final beta = BetaUiScope.maybeOf(context);
-    if (beta == null || beta.enabled == enabled || _betaUiWarningOpen) return;
-    if (!enabled) {
-      beta.onChanged(false);
-      return;
-    }
-
-    _betaUiWarningOpen = true;
-    try {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const _BetaUiWarningDialog(),
-      );
-      if (confirmed == true && mounted) {
-        BetaUiScope.maybeOf(context)?.onChanged(true);
-      }
-    } finally {
-      _betaUiWarningOpen = false;
-    }
   }
 
   Future<void> _pickArchiveConflictPolicy() async {
@@ -109,13 +81,13 @@ class _SettingsPageState extends State<SettingsPage> {
     final String logStatus;
     final Color logStatusColor;
     if (app.exportingLog) {
-      logStatus = '正在导出…';
+      logStatus = '正在导出到下载目录…';
       logStatusColor = scheme.outline;
     } else if (app.logExportMessage != null) {
       logStatus = app.logExportMessage!;
       logStatusColor = app.logExportFailed ? scheme.error : scheme.primary;
     } else {
-      logStatus = '选择读取记录和 JSON 保存位置';
+      logStatus = '选择读取记录，导出 JSON 到手机「下载」目录';
       logStatusColor = scheme.outline;
     }
     Widget section(String title, List<Widget> children) {
@@ -211,11 +183,16 @@ class _SettingsPageState extends State<SettingsPage> {
                   if (BetaUiScope.maybeOf(context) case final beta?)
                     Card(
                       child: SwitchListTile(
-                        secondary: const Icon(Icons.new_releases_outlined),
-                        title: const Text('启用新界面（beta）'),
-                        subtitle: const Text('预览全新界面与模拟数据，仅本次运行生效'),
+                        secondary: const Icon(Icons.dashboard_outlined),
+                        title: const Text('返回 2.x 主界面'),
+                        subtitle: Text(
+                          beta.switchError ??
+                              (beta.switching
+                                  ? '正在返回到 2.x 主界面…'
+                                  : '当前使用 1.x 备用界面；开启后返回 2.x，重启应用也会自动恢复 2.x。'),
+                        ),
                         value: beta.enabled,
-                        onChanged: _requestBetaUiChange,
+                        onChanged: beta.switching ? null : beta.onChanged,
                       ),
                     ),
                   Card(
@@ -233,7 +210,6 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ),
                 ]),
-                section('隐私', [const Card(child: FirebaseAnalyticsTile())]),
                 section('日志', [
                   Card(
                     child: Column(
@@ -321,88 +297,6 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _BetaUiWarningDialog extends StatefulWidget {
-  const _BetaUiWarningDialog();
-
-  @override
-  State<_BetaUiWarningDialog> createState() => _BetaUiWarningDialogState();
-}
-
-class _BetaUiWarningDialogState extends State<_BetaUiWarningDialog> {
-  static const _waitSeconds = 10;
-  int _remainingSeconds = _waitSeconds;
-  late final Timer _countdown;
-
-  @override
-  void initState() {
-    super.initState();
-    _countdown = Timer.periodic(const Duration(seconds: 1), (timer) {
-      final remaining = _waitSeconds - timer.tick;
-      if (remaining <= 0) timer.cancel();
-      setState(() => _remainingSeconds = remaining > 0 ? remaining : 0);
-    });
-  }
-
-  @override
-  void dispose() {
-    _countdown.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final foreground = scheme.onErrorContainer;
-    final canConfirm = _remainingSeconds == 0;
-    const emphasis = TextStyle(fontWeight: FontWeight.bold);
-    return AlertDialog(
-      scrollable: true,
-      backgroundColor: scheme.errorContainer,
-      surfaceTintColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(24),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(28),
-        side: BorderSide(color: foreground.withValues(alpha: 0.2)),
-      ),
-      icon: const Icon(Icons.warning_amber_rounded),
-      iconColor: foreground,
-      title: Text('新界面预览警告', style: TextStyle(color: foreground)),
-      content: Text.rich(
-        const TextSpan(
-          children: [
-            TextSpan(text: '新界面仅用于 '),
-            TextSpan(text: 'UI预览', style: emphasis),
-            TextSpan(text: '。页面操作仅作演示，卡片、余额和行程均为'),
-            TextSpan(text: '模拟数据', style: emphasis),
-            TextSpan(text: '。\n\n预览不会读取实体卡，也不会写入真实档案。'),
-          ],
-        ),
-        style: TextStyle(color: foreground),
-      ),
-      actions: [
-        TextButton(
-          style: TextButton.styleFrom(foregroundColor: foreground),
-          onPressed: () => Navigator.pop(context, false),
-          child: const Text('不开启'),
-        ),
-        FilledButton(
-          style: FilledButton.styleFrom(
-            backgroundColor: scheme.error,
-            foregroundColor: scheme.onError,
-            disabledBackgroundColor: foreground.withValues(alpha: 0.12),
-            disabledForegroundColor: foreground.withValues(alpha: 0.8),
-          ),
-          onPressed: canConfirm ? () => Navigator.pop(context, true) : null,
-          child: Text(
-            canConfirm ? '确认开启' : '确认开启（$_remainingSeconds 秒）',
-            textAlign: TextAlign.center,
-          ),
-        ),
-      ],
     );
   }
 }

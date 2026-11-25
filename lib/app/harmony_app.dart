@@ -2,16 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
-import '../features/qr/application/qr_acquisition.dart';
-import '../features/qr/presentation/qr_page.dart';
 import '../gallery/gallery_app.dart';
 import '../gallery/gallery_consent_screen.dart';
-import '../gallery/gallery_controller.dart';
 import '../gallery/gallery_preferences.dart';
 import '../platform/browser/feedback_browser.dart';
 import '../platform/storage/settings_store.dart';
 import 'app_dependencies.dart';
-import 'harmony_gallery_controller.dart';
 import 'legal_consent_gate.dart';
 
 class HarmonyApp extends StatelessWidget {
@@ -26,7 +22,6 @@ class HarmonyApp extends StatelessWidget {
     return LegalConsentGate(
       settingsStore: store,
       screenBuilder: GalleryConsentScreen.new,
-      enableAnalytics: false,
       child: _HarmonyGallery(
         store: store,
         createDependencies: createDependencies,
@@ -50,7 +45,6 @@ class _HarmonyGalleryState extends State<_HarmonyGallery>
   late final _app =
       widget.createDependencies?.call(widget.store) ??
       AppDependencies(settingsStore: widget.store);
-  late final _controller = HarmonyGalleryController(_app);
   late final _preferences = GalleryPreferences(
     readEnabled: () async =>
         await widget.store.read(SettingsKeys.galleryPredictiveBackEnabled) !=
@@ -66,14 +60,13 @@ class _HarmonyGalleryState extends State<_HarmonyGallery>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _controller.initialize();
+    unawaited(_app.init());
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
-      _controller.cancelRead();
       unawaited(_app.flushDiagnostics().catchError((Object _) {}));
     }
   }
@@ -81,7 +74,6 @@ class _HarmonyGalleryState extends State<_HarmonyGallery>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _controller.dispose();
     _preferences.dispose();
     _app.dispose();
     super.dispose();
@@ -95,16 +87,9 @@ class _HarmonyGalleryState extends State<_HarmonyGallery>
 
   @override
   Widget build(BuildContext context) => GalleryApp(
-    controller: _controller,
-    updates: _app.updates,
+    liveApp: _app,
     claimStartupUpdatePrompt: _claimStartupUpdatePrompt,
     preferences: _preferences,
     openWebLink: const MethodChannelFeedbackBrowser().open,
-    livePageBuilders: {
-      GalleryPage.qr: (_) => QrPage(
-        app: _app,
-        acquisition: const QrAcquisition(useDartGallery: true),
-      ),
-    },
   );
 }

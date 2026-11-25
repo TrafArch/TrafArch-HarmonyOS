@@ -6,8 +6,19 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/material.dart';
 
 import 'gallery_data.dart';
-import 'gallery_design.dart';
 import 'gallery_knowledge_index.dart';
+
+abstract interface class GalleryLiveAdapter {
+  Future<void> start();
+  Future<void> cancel();
+  Future<void> save(String name);
+  Future<void> rename(String name);
+  Future<void> setAutoSave(bool value);
+  Future<void> setIncludeOverdraft(bool value);
+  Future<void> setLogs(bool value);
+  Future<void> setHaptic(bool value);
+  Future<void> setMonet(bool value);
+}
 
 enum GalleryPage {
   home,
@@ -24,8 +35,6 @@ enum GalleryPage {
   licenses,
   knowledgeSearch,
   knowledgeCity,
-  knowledgeLine,
-  knowledgeStation,
 }
 
 enum GalleryOverlay {
@@ -39,7 +48,6 @@ enum GalleryOverlay {
   mode,
   export,
   importPreview,
-  rawFeedback,
   contributors,
   licenseDetail,
 }
@@ -50,7 +58,6 @@ extension GalleryOverlaySurface on GalleryOverlay {
     GalleryOverlay.trip ||
     GalleryOverlay.export ||
     GalleryOverlay.importPreview ||
-    GalleryOverlay.rawFeedback ||
     GalleryOverlay.contributors ||
     GalleryOverlay.licenseDetail => true,
     _ => false,
@@ -74,7 +81,6 @@ class GalleryRouteEntry {
     this.overlay,
     this.trip,
     this.license,
-    this.knowledgeResult,
     this.exportText = '',
     this.exportTitle = '',
     this.anchor,
@@ -88,7 +94,6 @@ class GalleryRouteEntry {
   final GalleryOverlay? overlay;
   final GalleryRecord? trip;
   final LicenseEntry? license;
-  final GalleryKnowledgeResult? knowledgeResult;
   final String exportText, exportTitle;
   final Rect? anchor;
   final String? anchorId;
@@ -109,7 +114,6 @@ class GalleryFaceCropSession {
     required this.cardId,
     required this.image,
     required this.sourceSize,
-    this.seed,
     this.detail = const GalleryFaceCrop(),
     this.list = const GalleryFaceCrop(),
     this.editing = true,
@@ -119,9 +123,6 @@ class GalleryFaceCropSession {
   final Uint8List image;
   final Size sourceSize;
 
-  /// Seed sampled when the photo was chosen; the crop rectangle does not change
-  /// it, so the theme can switch once when 完成 commits the image.
-  final Color? seed;
   GalleryFaceCrop detail;
   GalleryFaceCrop list;
   bool editing;
@@ -160,6 +161,10 @@ class GalleryController extends ChangeNotifier {
   bool includeOverdraft = false;
   bool monet = true;
   bool logsEnabled = false;
+
+  /// 系统触感反馈（震动）偏好。缺省开启；live 模式由设置持久化，
+  /// 样例模式只在当前会话内生效。
+  bool hapticEnabled = true;
   bool docked = false;
   ThemeMode themeMode = ThemeMode.system;
   String palette = 'blue';
@@ -172,7 +177,23 @@ class GalleryController extends ChangeNotifier {
   String knowledgeTab = 'tu';
   bool knowledgeMetadata = false;
   final Set<String> knowledgeExpanded = {};
-  GalleryKnowledgeResult? _knowledgeResult;
+
+  /// 城市详情页的导航参数（体系 + 城市标识 + 线路/编码摘要）。
+  /// 首页城市卡片与搜索城市结果都写入这里，详情页据此渲染。
+  GalleryKnowledgeCityView? selectedKnowledgeCity;
+
+  /// 从搜索结果进入城市页时要定位的线路／站点（名称）。首页城市卡入口为
+  /// null；城市页据此预先展开线路卡并滚动到卡片。
+  String? knowledgeCityLine;
+  String? knowledgeCityStation;
+
+  /// 编码搜索结果要原样展示的匹配值。两级 IA 下编码详情并入城市页
+  /// （spec §2.1、§12），原始编码在城市页的线路卡／站点行展示。
+  String? knowledgeCityCode;
+
+  /// 每次搜索定位自增一次，城市页只消费一次滚动（单调递增，不在 reset 里
+  /// 回退，避免与页面已消费的 token 撞号）。
+  int knowledgeCityReveal = 0;
   final Set<String> expanded = {};
   final List<String> logs = [];
   GalleryRecord? selectedTrip;
@@ -190,26 +211,17 @@ class GalleryController extends ChangeNotifier {
   Timer? _readTimer;
   bool _disposed = false;
   final Map<String, GalleryCardRemoval> _removedCards = {};
+  GalleryLiveAdapter? live;
+  String currentCardId = 'shanghai';
+  Map<String, List<GalleryRecord>> liveLedgers = const {};
 
-  GalleryCard get current => cards.firstWhere((c) => c.id == 'shanghai');
+  GalleryCard get current => cards.firstWhere(
+    (card) => card.id == currentCardId,
+    orElse: () => cards.first,
+  );
   GalleryCard get selectedCard =>
       cards.firstWhere((c) => c.id == selectedCardId, orElse: () => current);
-  bool get isLive => false;
-  bool get canSaveCurrent => hasRead && !current.saved;
-  String? get readNotice => null;
-  String? get archiveNotice => null;
-  Map<String, String> get readMetadata => const {};
-  Future<bool> saveCurrent(String name) async {
-    save(name);
-    return true;
-  }
 
-  /// Monet follows the card currently shown on the home page (spec §5.2).
-  /// Preset gradient faces derive a seed immediately; a custom photo uses the
-  /// seed extracted when the crop is committed.
-  Color get themeSeed =>
-      current.monetSeed ?? GalleryCardFace.byId(current.face).seed;
-  bool get hasCardSeed => current.image == null || current.monetSeed != null;
   List<GalleryCard> get savedCards => cards.where((c) => c.saved).toList();
   List<GalleryScene> get visibleScenes => data.scenes
       .where((scene) => scene.query['screen'] != 'footprints')
@@ -292,12 +304,6 @@ class GalleryController extends ChangeNotifier {
             license: d.overlay == GalleryOverlay.licenseDetail
                 ? selectedLicense
                 : null,
-            knowledgeResult: switch (d.page) {
-              GalleryPage.knowledgeCity ||
-              GalleryPage.knowledgeLine ||
-              GalleryPage.knowledgeStation => _knowledgeResult,
-              _ => null,
-            },
             exportText: exportText,
             exportTitle: exportTitle,
             anchor: _overlayAnchor,
@@ -322,17 +328,11 @@ class GalleryController extends ChangeNotifier {
     super.notifyListeners();
   }
 
-  void beginFaceCrop(
-    String cardId,
-    Uint8List image,
-    Size sourceSize, {
-    Color? seed,
-  }) {
+  void beginFaceCrop(String cardId, Uint8List image, Size sourceSize) {
     faceCrop = GalleryFaceCropSession(
       cardId: cardId,
       image: image,
       sourceSize: sourceSize,
-      seed: seed,
     );
     record('选择卡面图片');
     notifyListeners();
@@ -378,6 +378,7 @@ class GalleryController extends ChangeNotifier {
     readState = GalleryReadState.unread;
     hasRead = autoSave = includeOverdraft = logsEnabled = docked = false;
     monet = true;
+    hapticEnabled = true;
     themeMode = ThemeMode.system;
     palette = 'blue';
     selectedCardId = 'shanghai';
@@ -388,7 +389,10 @@ class GalleryController extends ChangeNotifier {
     knowledgeTab = 'tu';
     knowledgeMetadata = false;
     knowledgeExpanded.clear();
-    _knowledgeResult = null;
+    selectedKnowledgeCity = null;
+    knowledgeCityLine = null;
+    knowledgeCityStation = null;
+    knowledgeCityCode = null;
     expanded.clear();
     logs.clear();
     selectedTrip = null;
@@ -402,6 +406,10 @@ class GalleryController extends ChangeNotifier {
   void reset() {
     _reset();
     notifyListeners();
+  }
+
+  void attachLive(GalleryLiveAdapter value) {
+    live = value;
   }
 
   void record(String action) {
@@ -468,23 +476,66 @@ class GalleryController extends ChangeNotifier {
     showOverlay(GalleryOverlay.licenseDetail);
   }
 
-  void openCard(GalleryCard card) {
-    selectedCardId = card.id;
+  void openCard(GalleryCard card) => openCardId(card.id);
+
+  void openCardId(String id) {
+    selectedCardId = id;
     detailTab = 0;
     navigate(GalleryPage.detail);
   }
 
+  /// 首页城市卡片入口：携带城市标识进入二级城市详情页。
+  void openKnowledgeCity(GalleryKnowledgeCityView city) {
+    selectedKnowledgeCity = city;
+    knowledgeCityLine = null;
+    knowledgeCityStation = null;
+    knowledgeCityCode = null;
+    navigate(GalleryPage.knowledgeCity);
+  }
+
   void openKnowledgeResult(GalleryKnowledgeResult result) {
-    _knowledgeResult = result;
-    navigate(switch (result.kind) {
-      GalleryKnowledgeKind.city => GalleryPage.knowledgeCity,
-      GalleryKnowledgeKind.line => GalleryPage.knowledgeLine,
-      GalleryKnowledgeKind.station ||
-      GalleryKnowledgeKind.code => GalleryPage.knowledgeStation,
-    });
+    if (result.kind == GalleryKnowledgeKind.city) {
+      selectedKnowledgeCity = GalleryKnowledgeCityView.fromCity(result.city);
+      knowledgeCityLine = null;
+      knowledgeCityStation = null;
+      knowledgeCityCode = null;
+      _openKnowledgeCityRoute();
+      return;
+    }
+    // spec §7.1／§12：线路、站点、编码结果一律定位到二级城市详情页。
+    // 编码详情并入城市页：预先展开含该编码的线路卡，并在站点行原样展示
+    // 匹配编码，不再创建站点详情路由（spec §2.1）。
+    final line = result.line;
+    if (line == null) return;
+    final city = GalleryKnowledgeCityView.fromCity(result.city);
+    selectedKnowledgeCity = city;
+    knowledgeCityLine = line.name;
+    knowledgeCityStation = result.kind == GalleryKnowledgeKind.line
+        ? null
+        : result.station?.name;
+    knowledgeCityCode = result.kind == GalleryKnowledgeKind.code
+        ? result.code
+        : null;
+    knowledgeExpanded.add(
+      GalleryKnowledgeLineView.idFor(city.system, city.code, line.name),
+    );
+    knowledgeCityReveal++;
+    _openKnowledgeCityRoute();
+  }
+
+  void _openKnowledgeCityRoute() {
+    if (page == GalleryPage.knowledgeCity) {
+      notifyListeners();
+    } else {
+      navigate(GalleryPage.knowledgeCity);
+    }
   }
 
   void cancelRead() {
+    if (live != null) {
+      unawaited(live!.cancel());
+      return;
+    }
     _readTimer?.cancel();
     _readTimer = null;
     if (readState == GalleryReadState.reading) {
@@ -493,12 +544,17 @@ class GalleryController extends ChangeNotifier {
   }
 
   void read({bool fail = false}) {
+    if (live != null) {
+      unawaited(live!.start());
+      return;
+    }
     if (readState == GalleryReadState.reading) return;
     cancelRead();
     readState = GalleryReadState.reading;
     record('开始模拟读取');
     notifyListeners();
     final request = generation;
+    // 读卡模拟延迟属业务调度（Motion 1.0.1 §7.3 例外），不是动效时长，不进 Token。
     _readTimer = Timer(const Duration(milliseconds: 1600), () {
       if (_disposed || request != generation) return;
       _readTimer = null;
@@ -515,6 +571,10 @@ class GalleryController extends ChangeNotifier {
   }
 
   void save(String name) {
+    if (live != null) {
+      unawaited(live!.save(name));
+      return;
+    }
     if (!hasRead || readState == GalleryReadState.reading) return;
     update(() {
       if (name.trim().isNotEmpty) current.name = name.trim();
@@ -524,6 +584,10 @@ class GalleryController extends ChangeNotifier {
   }
 
   void rename(String name) {
+    if (live != null) {
+      unawaited(live!.rename(name));
+      return;
+    }
     if (name.trim().isEmpty) return;
     update(() {
       selectedCard.name = name.trim();
@@ -582,17 +646,32 @@ class GalleryController extends ChangeNotifier {
     return true;
   }
 
-  void setAutoSave(bool value) => update(() {
-    autoSave = value;
-    if (value && hasRead && readState != GalleryReadState.reading) {
-      current.saved = true;
+  void setAutoSave(bool value) {
+    if (live != null) {
+      unawaited(live!.setAutoSave(value));
+      return;
     }
-  }, '修改自动保存');
+    update(() {
+      autoSave = value;
+      if (value && hasRead && readState != GalleryReadState.reading) {
+        current.saved = true;
+      }
+    }, '修改自动保存');
+  }
 
-  void setIncludeOverdraft(bool value) =>
-      update(() => includeOverdraft = value, '修改上海透支显示');
+  void setIncludeOverdraft(bool value) {
+    if (live != null) {
+      unawaited(live!.setIncludeOverdraft(value));
+      return;
+    }
+    update(() => includeOverdraft = value, '修改上海透支显示');
+  }
 
   void setLogs(bool value) {
+    if (live != null) {
+      unawaited(live!.setLogs(value));
+      return;
+    }
     if (value) {
       logsEnabled = true;
       record('logging-enabled');
@@ -601,6 +680,24 @@ class GalleryController extends ChangeNotifier {
       logsEnabled = false;
     }
     notifyListeners();
+  }
+
+  /// 系统触感反馈开关。live 模式转发给持久化适配器（设置页开关同帧更新），
+  /// 样例模式只改当前会话，不落盘。
+  void setHaptic(bool value) {
+    if (live != null) {
+      unawaited(live!.setHaptic(value));
+      return;
+    }
+    update(() => hapticEnabled = value, '修改触感反馈');
+  }
+
+  void setMonet(bool value) {
+    if (live != null) {
+      unawaited(live!.setMonet(value));
+      return;
+    }
+    update(() => monet = value);
   }
 
   void export({bool all = false, bool log = false}) {
@@ -625,9 +722,11 @@ class GalleryController extends ChangeNotifier {
     showOverlay(GalleryOverlay.export);
   }
 
-  List<GalleryRecord> ledger(GalleryCard card) => card.id == 'shanghai'
-      ? trips.where((t) => t['kind'] != 'event').toList()
-      : data.ledger(card.id);
+  List<GalleryRecord> ledger(GalleryCard card) =>
+      liveLedgers[card.id] ??
+      (card.id == 'shanghai'
+          ? trips.where((t) => t['kind'] != 'event').toList()
+          : data.ledger(card.id));
 
   List<GalleryRecord> get filteredTrips {
     if (!hasRead) return [];
@@ -798,6 +897,7 @@ class GalleryQrController extends ChangeNotifier {
     final request = ++_request;
     origin = view == 'camera' ? 'camera' : 'gallery';
     notifyListeners();
+    // 扫码获取延迟同属业务调度，不取动效 Token。
     _timer = Timer(const Duration(milliseconds: 700), () {
       if (request != _request) return;
       busy = torch = false;

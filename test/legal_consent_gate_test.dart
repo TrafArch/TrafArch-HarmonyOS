@@ -12,21 +12,12 @@ void main() {
   const home = Key('protected-app');
   final messenger =
       TestWidgetsFlutterBinding.ensureInitialized().defaultBinaryMessenger;
-  const analytics = MethodChannel('transit_card_analyzer/analytics');
-  setUp(() {
-    messenger.setMockMethodCallHandler(
-      analytics,
-      (call) async => call.method == 'isAvailable' ? true : null,
-    );
-  });
-
   Widget gate(SettingsStore store) => LegalConsentGate(
     settingsStore: store,
     child: const SizedBox(key: home),
   );
 
   tearDown(() {
-    messenger.setMockMethodCallHandler(analytics, null);
     messenger.setMockMethodCallHandler(browser, null);
     messenger.setMockMethodCallHandler(SystemChannels.platform, null);
   });
@@ -90,7 +81,7 @@ void main() {
     expect(find.byKey(home), findsNothing);
     store.allowWrite.complete();
     await tester.pumpAndSettle();
-    expect(store.values[SettingsKeys.legalConsent], 'v2:analytics-on');
+    expect(store.values[SettingsKeys.legalConsent], 'true');
     expect(find.byKey(home), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pumpWidget(gate(store));

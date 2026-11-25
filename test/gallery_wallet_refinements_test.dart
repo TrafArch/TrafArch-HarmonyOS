@@ -118,6 +118,13 @@ void main() {
         c.current.saved = true;
         await mountFace(tester);
         final card = c.current;
+        final cityUnion = tester.widget<Image>(
+          find.byKey(ValueKey('face-cu-${card.id}')),
+        );
+        expect(
+          cityUnion.image,
+          const AssetImage('assets/gallery/city-union-logo.png'),
+        );
         expect(card.image, isNull);
         expect(
           tester
@@ -663,7 +670,7 @@ void main() {
     'regional brand logos replace nothing and TU dual cards stack locally',
     (tester) async {
       final shenzhen = GalleryCard.live(
-        id: 'shanghai',
+        id: 'shenzhen-dual',
         saved: true,
         name: '深圳通（交通联合版）',
         tail: '0000',
@@ -676,7 +683,7 @@ void main() {
         count: '1 条',
         face: 'blue',
         applications: const ['tu', 'shenzhen'],
-        liveCurrencyCode: 'CNY',
+        currencyCode: 'CNY',
       );
       final lingnan = GalleryCard.live(
         id: 'lingnan-single',
@@ -692,19 +699,19 @@ void main() {
         count: '1 条',
         face: 'graphite',
         applications: const ['lingnan'],
-        liveCurrencyCode: 'CNY',
+        currencyCode: 'CNY',
       );
       c.update(() {
-        c.cards[c.cards.indexWhere((card) => card.id == 'shanghai')] = shenzhen;
-        c.cards.add(lingnan);
+        c.cards.addAll([shenzhen, lingnan]);
+        c.currentCardId = shenzhen.id;
         c.hasRead = true;
       });
       c.navigate(GalleryPage.home);
       await mount(tester);
 
-      final tu = find.byKey(const ValueKey('face-tunion-shanghai'));
+      final tu = find.byKey(const ValueKey('face-tunion-shenzhen-dual'));
       final shenzhenLogo = find.byKey(
-        const ValueKey('face-shenzhen-tong-shanghai'),
+        const ValueKey('face-shenzhen-tong-shenzhen-dual'),
       );
       expect(tu, findsOneWidget);
       expect(shenzhenLogo, findsOneWidget);
@@ -717,7 +724,7 @@ void main() {
         const AssetImage('assets/gallery/shenzhen-tong-logo.png'),
       );
       expect(
-        find.byKey(const ValueKey('face-lingnan-tong-shanghai')),
+        find.byKey(const ValueKey('face-lingnan-tong-shenzhen-dual')),
         findsNothing,
       );
 

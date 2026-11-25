@@ -1,3 +1,6 @@
+import '../../../protocols/transit/local/local_card_models.dart'
+    show currentLocalCardLabel;
+
 /// 卡片档案卡型取值（写入数据库的稳定标识，已启用取值勿修改；
 /// 新增卡型在此登记，并由 CardIdentificationService 负责识别产出）。
 abstract final class CardTypes {
@@ -13,10 +16,20 @@ abstract final class CardTypes {
   /// 八达通-全国通卡（交通联合版，由卡种目录细化识别）。
   static const String octopusTunion = 'octopus_tunion';
 
-  /// 上海交通卡（交通联合版）：TU + CU 双标卡独立卡种（由专用识别器以
-  /// 卡号前缀 + 应用结构双重确认，不归入普通交通联合卡）。
+  /// 地区产品名仅供识别与展示，TU、CU 仍是独立读取的应用。
   static const String shanghaiTransitUnion = 'shanghai_transit_union';
   static const String harbinTransitUnion = 'harbin_transit_union';
+
+  /// Only a serial acquired from the TU wallet may identify these products.
+  static String? regionalTunionType(String? rawSerial) {
+    if (rawSerial == null || !RegExp(r'^[0-9]{20}$').hasMatch(rawSerial)) {
+      return null;
+    }
+    final number = rawSerial.replaceFirst(RegExp(r'^0+'), '');
+    if (number.startsWith('31047700')) return shanghaiTransitUnion;
+    if (number.startsWith('31049702')) return harbinTransitUnion;
+    return null;
+  }
 
   static const String lingnanTong = 'lingnan_tong';
   static const String lingnanTunion = 'lingnan_tunion';
@@ -56,3 +69,11 @@ String cardTypeLabel(String cardType) => switch (cardType) {
   CardTypes.amusementIc => 'Amusement IC',
   _ => '未识别交通卡',
 };
+
+/// Present historical automatically identified names without changing captured evidence.
+String? officialCardDisplayName(String cardType, String? name) =>
+    switch (cardType) {
+      CardTypes.lingnanTong => '岭南通',
+      CardTypes.localCard => currentLocalCardLabel(name),
+      _ => name,
+    };

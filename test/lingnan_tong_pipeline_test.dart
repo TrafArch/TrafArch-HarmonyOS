@@ -3,10 +3,13 @@ import 'package:transit_card_analyzer/features/archive/application/card_identifi
 import 'package:transit_card_analyzer/features/archive/domain/card_types.dart';
 import 'package:transit_card_analyzer/features/reference_data/data/tunion_knowledge_base.dart';
 import 'package:transit_card_analyzer/features/scan/application/local_card_reader.dart';
+import 'package:transit_card_analyzer/features/scan/domain/card_read_outcome.dart';
+import 'package:transit_card_analyzer/features/scan/domain/scan_presentation.dart';
+import 'package:transit_card_analyzer/features/trips/local_card_trip_presenter.dart';
+import 'package:transit_card_analyzer/features/trips/trip_filters.dart';
 import 'package:transit_card_analyzer/protocols/transit/card_parser.dart';
 import 'package:transit_card_analyzer/protocols/transit/local/apdu_exchange.dart';
 import 'package:transit_card_analyzer/protocols/transit/local/local_card_models.dart';
-import 'package:transit_card_analyzer/protocols/transit/local/cards/shanghai_transit_union_card.dart';
 import 'package:transit_card_analyzer/protocols/transit/multiapp/application_evidence.dart';
 import 'package:transit_card_analyzer/protocols/transport/transport_failure.dart';
 
@@ -22,8 +25,15 @@ const _ticl = '00A40400085041592E5449434C00';
 List<_Step> _rejectAppy() => [
   _Step.reject(_appy),
   _Step.reject(_appy.substring(0, _appy.length - 2)),
+  _Step.reject(_ticl),
+  _Step.reject(_ticl.substring(0, _ticl.length - 2)),
 ];
 const _tuFare = '0001000000000000C80612345678901220240501083000';
+const _tuCompositeFare = '0001000000000000C80912345678901220240501083000';
+// TU 1E: EP exit (04), rail (01), same time and terminal as the TU fare.
+const _tuMetroExit =
+    '0400001234567890120101000200000000000000C800002710'
+    '2024050108300058400101584000000000000000000000';
 const _serial = '00310487039534635882';
 const _tagLost = TransportFailure(
   kind: TransportFailureKind.tagLost,
@@ -77,28 +87,35 @@ class _Replay {
   }
 }
 
-List<_Step> _tu({String serial = _serial}) => [
+List<_Step> _tu({String serial = _serial, bool metroExit = false}) => [
   _Step(_mf),
   _Step(_tuSelect),
   _Step('00B0950000', '02002900123456780101${serial}2024010120291231AABB'),
   _Step('00B0960000', _hex(List<int>.filled(55, 0)..[0] = 1)),
   _Step('00B0970000', _hex(List<int>.filled(60, 0)..[6] = 0x31)),
   _Step('805C000204', '00002710'),
-  _Step('00B201C500', _tuFare),
+  _Step('00B201C500', metroExit ? _tuCompositeFare : _tuFare),
   _Step.reject('00B202C400'),
+  ..._rejectCu(),
+  _Step(_mf),
+  _Step(_tuSelect),
   _Step.reject('00B201D400'),
   _Step.reject('00B201D500'),
   _Step.reject('00B201F500'),
-  _Step.reject('00B201F400'),
+  if (metroExit) ...[
+    _Step('00B201F400', _tuMetroExit),
+    _Step.reject('00B202F400'),
+  ] else
+    _Step.reject('00B201F400'),
 ];
 
-List<_Step> _lnt({bool lost = false}) => [
+List<_Step> _lnt({bool lost = false, String? fare}) => [
   _Step(_appy),
   _Step('00B0950046', realInfo),
   _Step('00B2014416', '18140024080100000000000000000000000000000000'),
   _Step(_ticl),
   _Step('805C000204', '00000F00'),
-  _Step('00B201C417', realFares.first),
+  _Step('00B201C417', fare ?? realFares.first),
   if (lost) _Step.lost('00B202C417') else _Step.reject('00B202C417'),
 ];
 
@@ -110,22 +127,26 @@ List<_Step> _rejectCu() => [
   _Step.reject('80A4040009A00000000386980701'),
 ];
 
-// TU 已确认后的快速 CU 探测：不重置 MF、不尝试无 Le 分支。
-List<_Step> _fastCuReject() => [
-  _Step.reject(_cuSelect),
-  _Step.reject('80A4040009A0000000038698070100'),
-];
-
-List<_Step> _macauReject() => [
+List<_Step> _remainingWallets() => [
+  _Step.reject(_tuCashSelect),
   _Step.reject('00A404000AB0C4C3C5CDA8C7AEB0FC00'),
+  _Step.reject('00A40400075041592E535A54'),
+  _Step.reject('00A40000023F00'), // Wuhan MF
+  _Step.reject('00A40400094150312E5748435443'), // AP1.WHCTC by name
+  _Step.reject('00A40000023F00'), // Beijing MF
+  _Step.reject('00A40000021001'), // DF 1001
+  _Step.reject('00A404001091560000144D4F542E424D4143303031'), // MOT.BMAC001
+  _Step.reject('00A404000B535558494E2E4444463031'),
+  _Step.reject('00A4040008535A504B5F5A5959'),
+  _Step.reject('00A404000DD156000015B9ABB9B2D3A6D3C3'),
 ];
 
 List<_Step> _noTuLocalPrefix() => [
   _Step(_mf),
   _Step.reject(_tuSelect),
   _Step.reject('80A4040008A00000063201010500'),
-  _Step.reject(_tuCashSelect),
-  _Step.reject('80A4040008A00000063201010600'),
+  ..._rejectCu(),
+  ..._remainingWallets(),
 ];
 
 List<ApduRecord> _trips(ReadResult result) =>
@@ -145,7 +166,10 @@ void _expectTu(LocalReadOutcome outcome, String serial) {
   );
   expect(outcome.readResult.info.observedBalance, 10000);
   expect(_trips(outcome.readResult).single.balanceDelta, -200);
-  expect(outcome.shanghai, isNull);
+  expect(
+    outcome.applications.singleWhere((a) => a.appId == 'tu').confirmed,
+    isTrue,
+  );
 }
 
 void _expectLnt(ReadResult local) {
@@ -162,8 +186,131 @@ void _expectLnt(ReadResult local) {
 }
 
 void main() {
+  for (final shenzhen in [false, true]) {
+    final product = shenzhen ? '深圳通' : '岭南通';
+    test('$product双应用逐应用探测区分 TU 地铁出站与地方钱包流水', () async {
+      final replay = _Replay([
+        if (shenzhen) ..._rejectAppy() else ..._lnt(fare: realFares[4]),
+        ..._tu(
+          serial: shenzhen ? '00310487040000000001' : _serial,
+          metroExit: true,
+        ),
+        for (final step in _remainingWallets())
+          if (shenzhen && step.command == '00A40400075041592E535A54') ...[
+            _Step(step.command),
+            _Step.reject('00B0950020'),
+            _Step('805C000204', '00003039'),
+            _Step(
+              '00B201C400',
+              '00020000000000012C0900123456789020261031123456',
+            ),
+            _Step.reject('00B202C400'),
+          ] else
+            step,
+      ]);
+      final scan = await LocalCardReader(replay.call).scan();
+      final card = scan.result!.parsedCard;
+      final view = ScanPresentation(
+        TransitReadOutcome(card, applications: scan.applications),
+        KnowledgeBase.empty(),
+      );
+      final trip = view.analysis!.trips.single;
+      expect(
+        card.parserId,
+        shenzhen ? CardParserIds.shenzhenTunion : CardParserIds.lingnanTunion,
+      );
+      expect(trip.rideStatusName, '出站');
+      expect(trip.appTypeName, '城市轨道交通');
+      expect(trip.cityCode, '5840');
+      expect(trip.amountFen, 200);
+      final app = scan.applications.singleWhere(
+        (a) => a.appId == (shenzhen ? 'shenzhen' : 'lingnan'),
+      );
+      final wallet =
+          ApplicationEvidence.tryParse(app.toJson())!.payload! as ReadResult;
+      final local = describeLocalTrip(
+        wallet.trips.single,
+        profile: localTripProfileOf({'profile': app.appId}),
+        currencySymbol: '¥',
+      );
+      expect(local.mode, shenzhen ? TripModeFilter.other : TripModeFilter.rail);
+      expect(wallet.trips.single.balanceDelta, shenzhen ? -300 : -600);
+      replay.verify();
+    });
+  }
+
+  test('TICL-only purse has a balance and no APPY identity', () async {
+    final replay = _Replay([
+      ..._rejectAppy().take(2),
+      _Step(_ticl),
+      _Step.reject('00B2014416'),
+      _Step('805C000204', '0000012C'),
+      _Step.lost('00B201C417'),
+    ]);
+    final scan = await LocalCardReader(replay.call).scan();
+    final wallet = scan.applications.singleWhere((a) => a.appId == 'lingnan');
+    expect(wallet.balanceFen, 300);
+    expect(wallet.cardNumber, isNull);
+    expect(wallet.state, ApplicationProbeState.partial);
+    expect(
+      scan.applications.singleWhere((a) => a.appId == 'lingnan_appy').state,
+      ApplicationProbeState.selectRejected,
+    );
+    expect(scan.result!.parsedCard.info.applicationSerial, isNull);
+    expect(scan.result!.parsedCard.info.balanceFen, 300);
+    replay.verify();
+  });
+
+  test(
+    'loss selecting TICL preserves only the confirmed APPY identity',
+    () async {
+      final replay = _Replay([..._lnt().take(3), _Step.lost(_ticl)]);
+      final scan = await LocalCardReader(replay.call).scan();
+      final appy = scan.applications.singleWhere(
+        (a) => a.appId == 'lingnan_appy',
+      );
+      final ticl = scan.applications.singleWhere((a) => a.appId == 'lingnan');
+      expect(appy.state, ApplicationProbeState.readSucceeded);
+      expect(appy.cardNumber, '9534635882');
+      expect(appy.balanceFen, isNull);
+      expect(ticl.state, ApplicationProbeState.failed);
+      expect(ticl.confirmed, isFalse);
+      expect(scan.result!.parsedCard.info.applicationSerial, '9534635882');
+      expect(scan.result!.parsedCard.info.balanceFen, isNull);
+      replay.verify();
+    },
+  );
+
+  test(
+    'Shenzhen TU summary uses PAY.SZT even when both Lingnan directories exist',
+    () async {
+      final suffix = _remainingWallets();
+      final sztIndex = suffix.indexWhere(
+        (s) => s.command == '00A40400075041592E535A54',
+      );
+      final replay = _Replay([
+        ..._lnt(),
+        ..._tu(serial: '00310487049534635882'),
+        ...suffix.take(sztIndex),
+        _Step('00A40400075041592E535A54'),
+        _Step.reject('00B0950020'),
+        _Step('805C000204', '0000000A'),
+        _Step.lost('00B201C400'),
+      ]);
+      final result = (await LocalCardReader(replay.call).scan()).result!;
+      expect(result.parsedCard.parserId, CardParserIds.shenzhenTunion);
+      expect(result.parsedCard.localCard!.info.isSZT, isTrue);
+      expect(result.parsedCard.localCard!.info.observedBalance, 10);
+      expect(
+        result.applications.singleWhere((a) => a.appId == 'lingnan').balanceFen,
+        3840,
+      );
+      replay.verify();
+    },
+  );
+
   test('stateful card locks APPY/TICL after MF or TU selection; early LNT survives', () async {
-    final replay = _Replay([..._lnt(), ..._tu(), _Step.reject(_tuCashSelect)]);
+    final replay = _Replay([..._lnt(), ..._tu(), ..._remainingWallets()]);
     var locked = false;
     Future<List<int>> call(List<int> command) async {
       final hex = _hex(command);
@@ -195,7 +342,7 @@ void main() {
         _Step(_appy.substring(0, _appy.length - 2)),
         ..._lnt().skip(1),
         ..._tu(),
-        _Step.reject(_tuCashSelect),
+        ..._remainingWallets(),
       ]);
       final result = (await LocalCardReader(replay.call).read())!;
       _expectLnt(result.parsedCard.localCard!);
@@ -215,7 +362,7 @@ void main() {
       _Step(_ticl.substring(0, _ticl.length - 2)),
       ...lnt.skip(4),
       ..._tu(),
-      _Step.reject(_tuCashSelect),
+      ..._remainingWallets(),
     ]);
     final result = (await LocalCardReader(replay.call).read())!;
     _expectLnt(result.parsedCard.localCard!);
@@ -233,18 +380,16 @@ void main() {
         final replay = _Replay([
           ..._lnt(),
           ..._tu(serial: serial),
-          _Step.reject(_tuCashSelect),
+          ..._remainingWallets(),
         ]);
         final result = (await LocalCardReader(replay.call).read())!;
-        expect(result.parsedCard.parserId, CardParserIds.lingnanTong);
-        _expectLnt(result.readResult);
-        expect(result.parsedCard.localCard!.info.cardKindLabel, '岭南通');
-        final identified = CardIdentificationService(KnowledgeBase.empty())
-            .identify(result.parsedCard)!;
-        expect(identified.identity.officialName, '岭南通');
-        expect(identified.identity.cardType, CardTypes.lingnanTong);
-        expect(result.shanghai, isNull);
-        expect(result.readResult.extras.slots['lnt.tuCard'], isNotNull);
+        expect(result.parsedCard.parserId, CardParserIds.tunion);
+        _expectTu(result, serial);
+        _expectLnt(result.parsedCard.localCard!);
+        expect(
+          result.applications.where((a) => a.confirmed).map((a) => a.appId),
+          ['lingnan_appy', 'lingnan', 'tu'],
+        );
         replay.verify();
       },
     );
@@ -258,7 +403,7 @@ void main() {
         final replay = _Replay([
           ..._lnt(),
           ..._tu(serial: serial),
-          _Step.reject(_tuCashSelect),
+          ..._remainingWallets(),
         ]);
         final result = (await LocalCardReader(replay.call).read())!;
         expect(result.parsedCard.parserId, CardParserIds.lingnanTunion);
@@ -284,9 +429,7 @@ void main() {
         final replay = _Replay([
           ..._rejectAppy(),
           ..._tu(serial: serial),
-          ..._fastCuReject(),
-          ..._macauReject(),
-          _Step.reject(_tuCashSelect),
+          ..._remainingWallets(),
         ]);
         final result = (await LocalCardReader(replay.call).read())!;
         expect(result.parsedCard.parserId, CardParserIds.tunion);
@@ -301,23 +444,22 @@ void main() {
     );
   }
 
-  test(
-    'Shanghai TU rejects early APPY then remains in Shanghai pipeline',
-    () async {
-      final replay = _Replay([
-        ..._rejectAppy(),
-        ..._tu(serial: '00310477000000000001'),
-        ..._rejectCu(),
-        _Step.reject(_tuCashSelect),
-      ]);
-      final result = (await LocalCardReader(replay.call).read())!;
-      expect(result.parsedCard.parserId, CardParserIds.shanghaiTunion);
-      expect(result.shanghai!.tu.confirmed, isTrue);
-      expect(result.parsedCard.localCard, isNull);
-      expect(replay.commands.where((c) => c == _appy), hasLength(1));
-      replay.verify();
-    },
-  );
+  test('Shanghai TU uses the same physical sequence as ordinary TU', () async {
+    final replay = _Replay([
+      ..._rejectAppy(),
+      ..._tu(serial: '00310477000000000001'),
+      ..._remainingWallets(),
+    ]);
+    final result = (await LocalCardReader(replay.call).read())!;
+    expect(result.parsedCard.parserId, CardParserIds.tunion);
+    expect(
+      result.applications.singleWhere((a) => a.appId == 'tu').confirmed,
+      isTrue,
+    );
+    expect(result.parsedCard.localCard, isNull);
+    expect(replay.commands.where((c) => c == _appy), hasLength(1));
+    replay.verify();
+  });
 
   for (final transportError in [false, true]) {
     test(
@@ -325,12 +467,7 @@ void main() {
       () async {
         final replay = _Replay([
           if (transportError) _Step.lost(_appy) else ..._rejectAppy(),
-          if (!transportError) ...[
-            ..._tu(),
-            ..._fastCuReject(),
-            ..._macauReject(),
-            _Step.reject(_tuCashSelect),
-          ],
+          if (!transportError) ...[..._tu(), ..._remainingWallets()],
         ]);
         if (transportError) {
           await expectLater(
@@ -404,27 +541,11 @@ void main() {
     'archive uses the same stable TU fingerprint regardless of LNT outcome',
     () async {
       final service = CardIdentificationService(KnowledgeBase.empty());
-      final baselineReplay = _Replay(_tu());
-      final baseline = (await ShanghaiTransitUnionCardParser(
-        baselineReplay.call,
-      ).read()).tu.card!;
-      final baselineIdentity = service.identify(baseline)!;
-      baselineReplay.verify();
       final fingerprints = <String>[];
       for (final appyConfirmed in [false, true]) {
         final suffix = appyConfirmed ? _lnt() : _rejectAppy();
-        final replay = _Replay([
-          ...suffix,
-          ..._tu(),
-          if (!appyConfirmed) ..._fastCuReject(),
-          if (!appyConfirmed) ..._macauReject(),
-          _Step.reject(_tuCashSelect),
-        ]);
+        final replay = _Replay([...suffix, ..._tu(), ..._remainingWallets()]);
         final card = (await LocalCardReader(replay.call).read())!.parsedCard;
-        expect(
-          service.identify(card)!.fingerprint,
-          baselineIdentity.fingerprint,
-        );
         final identified = service.identify(card)!;
         expect(
           identified.identity.cardType,

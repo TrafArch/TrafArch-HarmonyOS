@@ -91,16 +91,26 @@ extension _GalleryComponents on _GalleryViewState {
       GalleryPage.cards => '卡包',
       _ => '足迹',
     };
+    final live = _GalleryLiveScope.of(context);
     final extra = switch (page) {
       GalleryPage.home => _icon(
         Icons.qr_code_scanner_rounded,
         '扫码',
-        () => c.navigate(GalleryPage.qr),
+        live == null
+            ? () => c.navigate(GalleryPage.qr)
+            : () async {
+                if (!await live.openQr() && mounted) {
+                  _toast(
+                    'NFC 尚未关闭，无法进入扫码。请重试。',
+                    type: GalleryFeedbackType.error,
+                  );
+                }
+              },
         outlined: false,
         grouped: true,
         color: t.text,
       ),
-      GalleryPage.expert when !c.isLive => _icon(
+      GalleryPage.expert when live == null => _icon(
         Icons.download_outlined,
         '导出卡片记录',
         () => c.export(),
@@ -200,8 +210,8 @@ extension _GalleryComponents on _GalleryViewState {
                           reverseDuration: _reduceMotion
                               ? Duration.zero
                               : _GalleryMotion.content,
-                          switchInCurve: Curves.easeOutCubic,
-                          switchOutCurve: Curves.easeInCubic,
+                          switchInCurve: _GalleryMotion.decelerate,
+                          switchOutCurve: _GalleryMotion.accelerate,
                           transitionBuilder: (child, animation) =>
                               FadeTransition(
                                 opacity: animation,
@@ -660,8 +670,7 @@ extension _GalleryComponents on _GalleryViewState {
   GalleryBalancePresentation _balancePresentation(GalleryCard card) =>
       GalleryBalancePresentation.parse(
         card.balance(c.includeOverdraft),
-        currencyCode:
-            card.liveCurrencyCode ?? card.currency?.name.toUpperCase(),
+        currencyCode: card.currency?.name.toUpperCase(),
       );
 
   Widget _cardBadge(GalleryCard card, {required String id}) {
@@ -716,7 +725,10 @@ extension _GalleryComponents on _GalleryViewState {
                 children: [
                   _text(
                     '${card.city} · ${card.type}',
-                    role: GalleryTypography.caption,
+                    role: GalleryTypography.body,
+                    size: 16,
+                    height: 24 / 16,
+                    weight: FontWeight.w600,
                     color: color,
                   ),
                   const SizedBox(width: 12),
@@ -742,15 +754,15 @@ extension _GalleryComponents on _GalleryViewState {
     final numberStyle = GalleryTypography.amount.copyWith(
       inherit: false,
       color: foreground,
-      fontSize: 23,
-      height: 28 / 23,
+      fontSize: 20,
+      height: 26 / 20,
       fontFeatures: const [FontFeature.tabularFigures()],
     );
     final unitStyle = GalleryTypography.caption.copyWith(
       inherit: false,
       color: foreground,
-      fontSize: 16,
-      height: 22 / 16,
+      fontSize: 14,
+      height: 20 / 14,
     );
     final amount = Semantics(
       label: '余额，${balance.displayText}',
@@ -810,8 +822,8 @@ extension _GalleryComponents on _GalleryViewState {
                       key: ValueKey('face-title-${card.id}'),
                       style: GalleryTypography.card.copyWith(
                         color: foreground,
-                        fontSize: 16,
-                        height: 23 / 16,
+                        fontSize: 20,
+                        height: 26 / 20,
                       ),
                     ),
                   ),
@@ -957,8 +969,9 @@ extension _GalleryComponents on _GalleryViewState {
                         showLabel: showLabels,
                         onTap: () {
                           // Page switches acknowledge through the system
-                          // haptic API; re-tapping the current page is inert.
-                          if (pages[i] != c.mainPage) {
+                          // haptic API; re-tapping the current page is inert
+                          // and the user preference can mute it entirely.
+                          if (pages[i] != c.mainPage && c.hapticEnabled) {
                             HapticFeedback.selectionClick();
                           }
                           c.navigate(pages[i]);
@@ -1193,11 +1206,13 @@ class _GalleryTabbedList extends StatefulWidget {
     required this.positionId,
     required this.padding,
     required this.children,
+    this.leadingSliver,
   });
   final PageStorageKey<String> listKey;
   final String positionId;
   final EdgeInsets padding;
   final List<Widget> children;
+  final Widget? leadingSliver;
 
   @override
   State<_GalleryTabbedList> createState() => _GalleryTabbedListState();
@@ -1267,12 +1282,27 @@ class _GalleryTabbedListState extends State<_GalleryTabbedList> {
   }
 
   @override
-  Widget build(BuildContext context) => ListView(
-    key: widget.listKey,
-    controller: _scroll,
-    padding: widget.padding,
-    children: widget.children,
-  );
+  Widget build(BuildContext context) {
+    if (widget.leadingSliver case final leading?) {
+      return CustomScrollView(
+        key: widget.listKey,
+        controller: _scroll,
+        slivers: [
+          leading,
+          SliverPadding(
+            padding: widget.padding,
+            sliver: SliverList.list(children: widget.children),
+          ),
+        ],
+      );
+    }
+    return ListView(
+      key: widget.listKey,
+      controller: _scroll,
+      padding: widget.padding,
+      children: widget.children,
+    );
+  }
 }
 
 String _formatFaceCardNumber(String value) {

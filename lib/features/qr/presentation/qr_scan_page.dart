@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,7 +11,8 @@ import '../../../shared/presentation/adaptive_layout.dart';
 
 /// 保留二进制载荷，通过 Navigator.pop 返回原始字节而非解码文本。
 class QrScanPage extends StatefulWidget {
-  const QrScanPage({super.key});
+  const QrScanPage({super.key, this.onReleased});
+  final ValueChanged<bool>? onReleased;
 
   @override
   State<QrScanPage> createState() => _QrScanPageState();
@@ -18,6 +20,7 @@ class QrScanPage extends StatefulWidget {
 
 class _QrScanPageState extends State<QrScanPage> with WidgetsBindingObserver {
   final MobileScannerController _controller = MobileScannerController(
+    autoStart: false,
     formats: const [BarcodeFormat.qrCode],
     detectionSpeed: DetectionSpeed.noDuplicates,
     autoZoom: true,
@@ -26,6 +29,9 @@ class _QrScanPageState extends State<QrScanPage> with WidgetsBindingObserver {
   /// 防止 onDetect 连续多帧回调重复触发返回。
   bool _handled = false;
   bool _cameraWanted = true;
+  bool _finishing = false;
+  bool _stopFailed = false;
+  List<int>? _pendingPayload;
   Object? _cameraError;
   Future<void> _cameraWork = Future<void>.value();
 
@@ -33,13 +39,9 @@ class _QrScanPageState extends State<QrScanPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // MobileScanner attaches and starts this external controller. Follow its
-    // completion too: a permission dialog may suspend the app during start().
-    _controller.addListener(_onCameraChanged);
-  }
-
-  void _onCameraChanged() {
-    if (!_cameraWanted && _controller.value.isRunning) _syncCamera();
+    _cameraWanted =
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.paused;
+    _syncCamera();
   }
 
   @override
@@ -48,19 +50,18 @@ class _QrScanPageState extends State<QrScanPage> with WidgetsBindingObserver {
     _syncCamera();
   }
 
-  void _syncCamera({bool restart = false}) {
+  void _syncCamera() {
     // Serialize stop/start when focus changes rapidly during fold or multiwindow.
     _cameraWork = _cameraWork.then((_) async {
-      if (!mounted || _handled || !_controller.value.isInitialized) return;
+      if (!mounted || _handled) return;
       try {
-        if (_cameraWanted && (_cameraError == null || restart)) {
-          if (restart) await _controller.stop();
+        if (_stopFailed || !_cameraWanted) await _stopCamera();
+        if (_cameraWanted) {
           await _controller.start();
-          if (mounted && _cameraError != null) {
-            setState(() => _cameraError = null);
-          }
-        } else {
-          await _controller.stop();
+          if (!_cameraWanted && !_handled) await _stopCamera();
+        }
+        if (mounted && _cameraError != null) {
+          setState(() => _cameraError = null);
         }
       } on Object catch (error) {
         // A lost camera may fail stop as well as start. Keep the operation queue
@@ -70,111 +71,148 @@ class _QrScanPageState extends State<QrScanPage> with WidgetsBindingObserver {
     });
   }
 
+  Future<void> _stopCamera() async {
+    try {
+      if (_stopFailed) {
+        if (Platform.isAndroid) {
+          await const MethodChannel(
+            'dev.steenbakker.mobile_scanner/scanner/method',
+          ).invokeMethod<void>('stop', {'force': true});
+        } else {
+          await MobileScannerPlatform.instance.stop();
+        }
+      } else {
+        await _controller.stop();
+      }
+      _stopFailed = false;
+    } catch (_) {
+      _stopFailed = true;
+      rethrow;
+    }
+  }
+
+  Future<void> _releaseAfterUnmount(ValueChanged<bool>? callback) async {
+    var closed = false;
+    try {
+      await _cameraWork;
+      await _stopCamera();
+      closed = true;
+    } catch (_) {
+      closed = false;
+    } finally {
+      try {
+        await _controller.dispose();
+      } catch (_) {
+        closed = false;
+      }
+      callback?.call(closed);
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _controller.removeListener(_onCameraChanged);
-    unawaited(_cameraWork.then((_) => _controller.dispose()));
+    unawaited(_releaseAfterUnmount(widget.onReleased));
     super.dispose();
   }
 
   void _onDetect(BarcodeCapture capture) {
     final payload = qrPayloadOfBarcodes(capture.barcodes);
-    if (payload != null && payload.isNotEmpty) {
-      _finishWithPayload(payload);
+    if (!_handled && payload != null && payload.isNotEmpty) {
+      unawaited(_finish(payload));
     }
   }
 
-  void _onDetectError(Object error, StackTrace stackTrace) {
-    if (!mounted || _handled || !_cameraWanted) return;
-    setState(() => _cameraError = error);
-    _syncCamera();
-  }
-
-  Future<void> _toggleTorch() async {
+  Future<void> _finish(List<int>? payload) async {
+    if (_finishing || !mounted) return;
+    setState(() {
+      _finishing = true;
+      _handled = true;
+      _pendingPayload = payload;
+      _cameraError = null;
+    });
     try {
-      await _controller.toggleTorch();
+      await _cameraWork;
+      await _stopCamera();
+      if (mounted) Navigator.of(context).pop<List<int>>(payload);
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('无法切换闪光灯')));
+        setState(() {
+          _finishing = false;
+          _cameraError = '相机尚未确认关闭，请重试。';
+        });
       }
     }
-  }
-
-  /// 统一返回解码字节，仅生效一次。
-  void _finishWithPayload(List<int> payload) {
-    if (_handled || !mounted || payload.isEmpty) return;
-    _handled = true;
-    Navigator.of(context).pop<List<int>>(payload);
   }
 
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: AppTheme.systemUiOverlayStyle(Colors.black),
-      child: FoldSafePage(
-        child: Scaffold(
-          backgroundColor: Colors.black,
-          appBar: AppBar(
-            title: const Text('扫描乘车码（JT/T 1179）'),
+      child: PopScope<List<int>>(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) unawaited(_finish(null));
+        },
+        child: FoldSafePage(
+          child: Scaffold(
             backgroundColor: Colors.black,
-            foregroundColor: Colors.white,
-            actions: [
-              ValueListenableBuilder(
-                valueListenable: _controller,
-                builder: (context, camera, _) => IconButton(
-                  tooltip: '闪光灯',
-                  onPressed:
-                      camera.isRunning &&
-                          (camera.torchState == TorchState.on ||
-                              camera.torchState == TorchState.off)
-                      ? _toggleTorch
-                      : null,
-                  icon: Icon(
-                    camera.torchState == TorchState.on
-                        ? Icons.flashlight_off_outlined
-                        : Icons.flashlight_on_outlined,
-                  ),
-                ),
+            appBar: AppBar(
+              leading: BackButton(
+                onPressed: _finishing ? null : () => _finish(null),
               ),
-            ],
-          ),
-          body: SafeArea(
-            top: false,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                MobileScanner(
-                  controller: _controller,
-                  onDetect: _onDetect,
-                  onDetectError: _onDetectError,
-                  errorBuilder: (context, error) => _ScanErrorView(
-                    error: error,
-                    onRetry: () => _syncCamera(restart: true),
-                  ),
-                  overlayBuilder: (context, constraints) =>
-                      const _ScanOverlay(),
-                ),
-                if (_cameraError case final error?)
-                  ColoredBox(
-                    color: Colors.black,
-                    child: _ScanErrorView(
-                      error: error,
-                      onRetry: () => _syncCamera(restart: true),
-                    ),
-                  ),
-                const Positioned(
-                  left: 24,
-                  right: 24,
-                  bottom: 48,
-                  child: Text(
-                    '将乘车码二维码对准取景框',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white70, fontSize: 12),
-                  ),
+              title: const Text('扫描乘车码（JT/T 1179）'),
+              backgroundColor: Colors.black,
+              foregroundColor: Colors.white,
+              actions: [
+                IconButton(
+                  tooltip: '闪光灯',
+                  onPressed: _handled ? null : () => _controller.toggleTorch(),
+                  icon: const Icon(Icons.flashlight_on_outlined),
                 ),
               ],
+            ),
+            body: SafeArea(
+              top: false,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  MobileScanner(
+                    controller: _controller,
+                    onDetect: _onDetect,
+                    errorBuilder: (context, error) =>
+                        _ScanErrorView(error: error, onRetry: _syncCamera),
+                    overlayBuilder: (context, constraints) =>
+                        const _ScanOverlay(),
+                  ),
+                  if (_cameraError case final error?)
+                    ColoredBox(
+                      color: Colors.black,
+                      child: _ScanErrorView(
+                        error: error,
+                        onRetry: _handled
+                            ? () => _finish(_pendingPayload)
+                            : _syncCamera,
+                      ),
+                    ),
+                  if (_finishing)
+                    const Center(
+                      child: CircularProgressIndicator(
+                        semanticsLabel: '正在关闭相机',
+                      ),
+                    ),
+                  const Positioned(
+                    left: 24,
+                    right: 24,
+                    bottom: 48,
+                    child: Text(
+                      '将乘车码二维码对准取景框',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -218,11 +256,6 @@ class _ScanErrorView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final detail = switch (error) {
-      MobileScannerException(:final errorDetails) => errorDetails?.message,
-      MobileScannerBarcodeException(:final message) => message,
-      _ => null,
-    };
     return Center(
       child: SingleChildScrollView(
         child: Padding(
@@ -237,7 +270,7 @@ class _ScanErrorView extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               Text(
-                detail == null ? '相机不可用' : '相机不可用：$detail',
+                '相机不可用：$error',
                 textAlign: TextAlign.center,
                 style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),

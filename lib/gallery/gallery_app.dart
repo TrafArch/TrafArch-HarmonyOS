@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'dart:ui'
     show ImageFilter, ImageByteFormat, Size, instantiateImageCodec, lerpDouble;
 
+import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -16,26 +17,54 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../app/app_info.dart';
 import '../app/app_dependencies.dart';
-import '../app/harmony_gallery_controller.dart';
+import '../app/beta_ui_scope.dart';
+import '../features/archive/application/archive_history.dart';
+import '../features/archive/application/archive_record_count.dart';
+import '../features/archive/application/cu_archive_projection.dart';
+import '../features/archive/application/suica_archive_projection.dart';
+import '../features/archive/data/app_database.dart';
+import '../features/archive/data/card_repository.dart';
+import '../features/archive/domain/card_name_extension.dart';
+import '../features/archive/domain/card_session_snapshot.dart';
+import '../features/archive/domain/card_types.dart';
+import '../features/archive/presentation/archive_balance_display.dart';
+import '../features/archive/presentation/archive_trip_presenter.dart';
+import '../features/archive/presentation/shanghai_archive_mirrored_records.dart';
 import '../features/archive/presentation/archive_transfer_dialogs.dart';
+import '../features/cards/cards_page.dart';
+import '../features/expert/expert_page.dart';
 import '../features/expert/expert_formatters.dart';
+import '../features/home/presentation/result_labels.dart';
+import '../features/qr/presentation/jt_t1179_qr_display.dart';
+import '../features/qr/presentation/qr_acquire.dart';
+import '../features/recovery/recovery_state.dart';
 import '../features/reference_data/data/city_union_lookup_rules.dart';
 import '../features/reference_data/data/tunion_knowledge_base.dart';
+import '../features/scan/application/scan_controller.dart';
 import '../features/settings/presentation/diagnostic_export_dialog.dart';
-import '../features/settings/presentation/firebase_analytics_tile.dart';
 import '../features/transit_analysis/balance_interpretation.dart';
 import '../features/transit_analysis/tunion_analysis_models.dart';
 import '../features/trips/journey_transport_icon.dart';
+import '../features/trips/cu_trip_presenter.dart';
+import '../features/trips/journey_presentation.dart';
+import '../features/trips/local_card_trip_presenter.dart';
 import '../features/trips/trip_filters.dart';
+import '../features/trips/trip_entry_presenter.dart';
+import '../features/trips/trip_cards_view.dart';
 import '../features/updates/update_prompt.dart';
 import '../features/updates/update_service.dart';
 import '../platform/browser/feedback_browser.dart';
 import '../platform/qr/qr_image_picker.dart';
 import '../platform/storage/archive_document_store.dart';
+import '../protocols/felica/models/felica_card_type.dart';
+import '../protocols/felica/models/felica_capture.dart';
+import '../protocols/felica/models/jpy_amount_formatter.dart';
 import '../protocols/transit/card_parser.dart';
 import '../protocols/transit/city_union/city_union_models.dart';
+import '../protocols/transit/multiapp/application_evidence.dart';
 import '../protocols/transit/tunion/tunion_models.dart';
 import '../shared/app_support.dart';
+import '../shared/presentation/application_evidence_panel.dart';
 import '../shared/domain/archive_conflict_policy.dart';
 import 'gallery_controller.dart';
 import 'gallery_balance_presentation.dart';
@@ -45,15 +74,17 @@ import 'gallery_data.dart';
 import 'gallery_theme.dart';
 import 'gallery_design.dart';
 import 'gallery_layout.dart';
-import 'gallery_monet.dart';
 import 'gallery_preferences.dart';
 import 'gallery_feedback.dart';
 import 'gallery_knowledge_index.dart';
 import 'gallery_motion.dart';
+import 'gallery_rail_line_catalog.dart';
 import 'gallery_spending.dart';
+import 'gallery_archive_spending.dart';
 
 part 'gallery_components.dart';
 part 'gallery_pages.dart';
+part 'gallery_rail_line_badge.dart';
 part 'gallery_inspection.dart';
 part 'gallery_knowledge_search.dart';
 part 'gallery_overlays.dart';
@@ -64,30 +95,31 @@ part 'gallery_read_prompt.dart';
 part 'gallery_wallet_item.dart';
 part 'gallery_detail.dart';
 part 'gallery_face_crop.dart';
-part 'gallery_live_expert.dart';
+part 'gallery_live_read.dart';
+part 'gallery_live_archive.dart';
 part 'gallery_live_knowledge.dart';
 
 class GalleryApp extends StatefulWidget {
   const GalleryApp({
     super.key,
     this.controller,
-    this.updates,
+    this.liveApp,
     this.claimStartupUpdatePrompt,
     this.onDisableBeta,
     this.openWebLink,
     this.openEmail,
-    this.livePageBuilders = const {},
     this.preferences,
+    this.railLineCatalog,
     this.loadKnowledgeIndex = GalleryKnowledgeIndex.load,
-  });
+  }) : assert(liveApp == null || controller == null);
   final GalleryController? controller;
-  final UpdateService? updates;
+  final AppDependencies? liveApp;
   final bool Function()? claimStartupUpdatePrompt;
   final VoidCallback? onDisableBeta;
   final Future<void> Function(Uri)? openWebLink;
   final Future<bool> Function(String)? openEmail;
-  final Map<GalleryPage, WidgetBuilder> livePageBuilders;
   final GalleryPreferences? preferences;
+  final GalleryRailLineCatalog? railLineCatalog;
   final Future<GalleryKnowledgeIndex> Function() loadKnowledgeIndex;
 
   @override
@@ -95,40 +127,131 @@ class GalleryApp extends StatefulWidget {
 }
 
 class _GalleryAppState extends State<GalleryApp> {
-  late final Future<GalleryController>? _ready;
+  late final Future<GalleryController> _ready;
+  late final Future<GalleryRailLineCatalog> _railLineCatalog;
   GalleryController? _owned;
+  _GalleryLiveRead? _liveRead;
   late final GalleryPreferences _preferences;
+  late final AppLifecycleListener _systemColorLifecycle;
+  Color? _systemMonetSeed;
+  int _systemColorRequest = 0;
   final _appearance = _GalleryAppearance();
   Future<GalleryKnowledgeIndex>? _knowledgeIndex;
+  KnowledgeBase? _indexedKnowledge;
 
-  Future<GalleryKnowledgeIndex> _loadKnowledge() =>
-      _knowledgeIndex ??= Future.sync(widget.loadKnowledgeIndex).then(
-        (index) => index,
-        onError: (Object error, StackTrace stack) {
-          _knowledgeIndex = null;
-          Error.throwWithStackTrace(error, stack);
-        },
-      );
+  Future<GalleryKnowledgeIndex> _loadKnowledge() async {
+    Future<GalleryKnowledgeIndex> Function() load = widget.loadKnowledgeIndex;
+    if (widget.liveApp case final app?) {
+      await app.references.initialize();
+      final knowledge = app.knowledgeBase;
+      if (!identical(knowledge, _indexedKnowledge)) {
+        _indexedKnowledge = knowledge;
+        _knowledgeIndex = null;
+      }
+      load = () =>
+          GalleryKnowledgeIndex.loadPaths(knowledge?.packagePaths ?? const {});
+    }
+    final request = _knowledgeIndex ??= Future.sync(load);
+    try {
+      final index = await request;
+      await _applySnapshotLineCounts(index);
+      return index;
+    } catch (_) {
+      if (identical(request, _knowledgeIndex)) _knowledgeIndex = null;
+      rethrow;
+    }
+  }
+
+  /// 发布包索引本身不含「设计快照」的声明线路数。样例 fixtures 的 regions
+  /// 提供了该值，载入后按体系 + 城市编码补进索引，搜索路径（城市页、
+  /// 搜索结果摘要）因此与首页城市卡共用同一口径；live 的 regions 为空，
+  /// 等价于不补。
+  Future<void> _applySnapshotLineCounts(GalleryKnowledgeIndex index) async {
+    final controller = await _ready;
+    final systems = controller.data.knowledge['systems'];
+    if (systems is! Map) return;
+    index.applyDeclaredLineCounts({
+      for (final entry in systems.entries)
+        if (entry.value case final Map system)
+          '${entry.key}': {
+            if (system['regions'] case final List regions)
+              for (final region in regions)
+                if (region is Map &&
+                    region['lineCount'] is int &&
+                    region['code'] != null)
+                  '${region['code']}': region['lineCount'] as int,
+          },
+    });
+  }
 
   @override
   void initState() {
     super.initState();
+    _railLineCatalog = widget.railLineCatalog == null
+        ? GalleryRailLineCatalog.load(rootBundle)
+        : Future.value(widget.railLineCatalog);
+    _systemColorLifecycle = AppLifecycleListener(onResume: _refreshSystemMonet);
+    unawaited(_refreshSystemMonet());
     _preferences = widget.preferences ?? GalleryPreferences();
+    if (widget.liveApp case final app?) {
+      final controller = _owned = GalleryController(GalleryData.live());
+      _liveRead = _GalleryLiveRead(
+        app,
+        controller,
+        _preferences.restoreFaceImages,
+      );
+      // Keep the live shell available while app-private image storage resolves.
+      // A slow or temporarily unavailable filesystem must not block tab startup.
+      _ready = Future.value(controller);
+      unawaited(_restoreFaceImages(controller));
+      return;
+    }
     _ready = widget.controller != null
-        ? null
+        ? Future.value(widget.controller!)
         : GalleryData.load().then((data) {
             final controller = GalleryController(data);
             if (!mounted) {
               controller.dispose();
             } else {
               _owned = controller;
+              unawaited(_restoreFaceImages(controller));
             }
             return controller;
           });
+    if (widget.controller != null && widget.preferences != null) {
+      unawaited(_restoreFaceImages(widget.controller!));
+    }
+  }
+
+  Future<GalleryController> _restoreFaceImages(
+    GalleryController controller,
+  ) async {
+    await _preferences.restoreFaceImages(controller.cards);
+    if (mounted) controller.notifyListeners();
+    return controller;
+  }
+
+  Future<void> _refreshSystemMonet() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    final request = ++_systemColorRequest;
+    Color? seed;
+    try {
+      final argb = (await DynamicColorPlugin.getCorePalette())?.primary.get(40);
+      if (argb != null && (argb & 0xff000000) == 0xff000000) {
+        seed = Color(argb);
+      }
+    } on PlatformException {
+      seed = null;
+    }
+    if (mounted && request == _systemColorRequest && seed != _systemMonetSeed) {
+      setState(() => _systemMonetSeed = seed);
+    }
   }
 
   @override
   void dispose() {
+    _systemColorLifecycle.dispose();
+    _liveRead?.dispose();
     _owned?.dispose();
     if (widget.preferences == null) _preferences.dispose();
     super.dispose();
@@ -137,7 +260,7 @@ class _GalleryAppState extends State<GalleryApp> {
   @override
   Widget build(BuildContext context) => FutureBuilder<GalleryController>(
     future: _ready,
-    initialData: widget.controller,
+    initialData: widget.controller ?? _owned,
     builder: (context, snapshot) {
       final c = snapshot.data;
       if (c == null) {
@@ -146,78 +269,93 @@ class _GalleryAppState extends State<GalleryApp> {
           home: Scaffold(
             body: Center(
               child: snapshot.hasError
-                  ? const Text('数据加载失败，请重新打开应用')
+                  ? const Text('界面加载失败，请重新打开应用')
                   : const CircularProgressIndicator(),
             ),
           ),
         );
       }
-      return AnimatedBuilder(
-        animation: c,
-        builder: (context, _) {
-          // Monet follows the home card. Until a newly chosen photo has been
-          // sampled, use the user's preset instead of flashing an old theme.
-          final monetSeed = c.monet && c.hasCardSeed ? c.themeSeed : null;
-          final home = _GalleryNavigator(
-            key: ValueKey(c.generation),
-            controller: c,
-            preferences: _preferences,
-            loadKnowledge: _loadKnowledge,
-            onDisableBeta: widget.onDisableBeta,
-            openWebLink: widget.openWebLink,
-            openEmail: widget.openEmail,
-            livePageBuilders: widget.livePageBuilders,
-          );
-          final updates = widget.updates;
-          final claimStartupUpdate = widget.claimStartupUpdatePrompt;
-          return MaterialApp(
-            title: 'TrafArch',
-            debugShowCheckedModeBanner: false,
-            locale: const Locale('zh', 'CN'),
-            supportedLocales: const [Locale('zh', 'CN'), Locale('en')],
-            localizationsDelegates: GlobalMaterialLocalizations.delegates,
-            themeMode: c.themeMode,
-            themeAnimationDuration: GalleryMotion.duration(
-              context,
-              GalleryMotion.theme,
-            ),
-            themeAnimationCurve: GalleryMotion.standard,
-            theme: _appearance.theme(c, false, monetSeed),
-            darkTheme: _appearance.theme(c, true, monetSeed),
-            builder: (context, child) {
-              final tokens = Theme.of(context).extension<GalleryTokens>()!;
-              return AnnotatedRegion<SystemUiOverlayStyle>(
-                value:
-                    (tokens.dark
-                            ? SystemUiOverlayStyle.light
-                            : SystemUiOverlayStyle.dark)
-                        .copyWith(
-                          statusBarColor: Colors.transparent,
-                          systemNavigationBarColor: c.docked && c.isMainPage
-                              ? tokens.dockedNavigationSurface
-                              : tokens.canvas,
-                          systemNavigationBarDividerColor: Colors.transparent,
-                        ),
-                child: ColoredBox(
-                  color: tokens.canvas,
-                  child: GalleryWindow(
-                    child: GalleryFeedbackHost(
-                      key: ValueKey(c.generation),
-                      mainPage: c.isMainPage,
-                      docked: c.docked,
-                      child: child!,
-                    ),
+      return FutureBuilder<GalleryRailLineCatalog>(
+        future: _railLineCatalog,
+        builder: (context, railSnapshot) {
+          final railCatalog = railSnapshot.data;
+          return _GalleryRailLineCatalogScope(
+            catalog: railCatalog ?? GalleryRailLineCatalog.empty(),
+            child: AnimatedBuilder(
+              animation: c,
+              builder: (context, _) {
+                final monetSeed = c.monet ? _systemMonetSeed : null;
+                final home = _GalleryLiveScope(
+                  notifier: _liveRead,
+                  child: _GalleryNavigator(
+                    key: ValueKey(c.generation),
+                    controller: c,
+                    preferences: _preferences,
+                    loadKnowledge: _loadKnowledge,
+                    onDisableBeta: widget.onDisableBeta,
+                    openWebLink: widget.openWebLink,
+                    openEmail: widget.openEmail,
                   ),
-                ),
-              );
-            },
-            home: updates != null && claimStartupUpdate != null
-                ? UpdatePrompt(
-                    service: updates,
-                    shouldShow: claimStartupUpdate,
-                    child: home,
-                  )
-                : home,
+                );
+                final updates = widget.liveApp?.updates;
+                final claimStartupUpdate = widget.claimStartupUpdatePrompt;
+                return MaterialApp(
+                  title: 'TrafArch',
+                  debugShowCheckedModeBanner: false,
+                  locale: const Locale('zh', 'CN'),
+                  supportedLocales: const [Locale('zh', 'CN'), Locale('en')],
+                  localizationsDelegates: GlobalMaterialLocalizations.delegates,
+                  themeMode: c.themeMode,
+                  // Switching brightness repaints the whole 2.x tree. Material's
+                  // animated theme cross-fade rebuilds every themed widget on each
+                  // frame, which is what dropped frames in settings; apply the new
+                  // semantic colours in one frame instead. Layout, state, scroll
+                  // offsets and inputs are untouched, and reduce-motion users see
+                  // the same instant result.
+                  themeAnimationDuration: Duration.zero,
+                  themeAnimationCurve: GalleryMotion.standard,
+                  theme: _appearance.theme(c, false, monetSeed),
+                  darkTheme: _appearance.theme(c, true, monetSeed),
+                  builder: (context, child) {
+                    final tokens = Theme.of(context)
+                        .extension<GalleryTokens>()!;
+                    return AnnotatedRegion<SystemUiOverlayStyle>(
+                      value:
+                          (tokens.dark
+                                  ? SystemUiOverlayStyle.light
+                                  : SystemUiOverlayStyle.dark)
+                              .copyWith(
+                                statusBarColor: Colors.transparent,
+                                systemNavigationBarColor:
+                                    c.docked && c.isMainPage
+                                    ? tokens.dockedNavigationSurface
+                                    : tokens.canvas,
+                                systemNavigationBarDividerColor:
+                                    Colors.transparent,
+                              ),
+                      child: ColoredBox(
+                        color: tokens.canvas,
+                        child: GalleryWindow(
+                          child: GalleryFeedbackHost(
+                            key: ValueKey(c.generation),
+                            mainPage: c.isMainPage,
+                            docked: c.docked,
+                            child: child!,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                  home: updates != null && claimStartupUpdate != null
+                      ? UpdatePrompt(
+                          service: updates,
+                          shouldShow: claimStartupUpdate,
+                          child: home,
+                        )
+                      : home,
+                );
+              },
+            ),
           );
         },
       );
@@ -232,21 +370,18 @@ class _GalleryAppState extends State<GalleryApp> {
 class _GalleryAppearance {
   final _themes = <(int, bool, String, Color?), ThemeData>{};
 
-  ThemeData theme(GalleryController controller, bool dark, Color? monetSeed) =>
-      _themes.putIfAbsent(
-        (
-          identityHashCode(controller.data),
-          dark,
-          controller.palette,
-          monetSeed,
-        ),
-        () => GalleryTokens.from(
-          controller.data,
-          dark,
-          controller.palette,
-          monetSeed: monetSeed,
-        ).theme(),
-      );
+  ThemeData theme(GalleryController controller, bool dark, Color? monetSeed) {
+    final palette = controller.monet ? 'blue' : controller.palette;
+    return _themes.putIfAbsent(
+      (identityHashCode(controller.data), dark, palette, monetSeed),
+      () => GalleryTokens.from(
+        controller.data,
+        dark,
+        palette,
+        monetSeed: monetSeed,
+      ).theme(),
+    );
+  }
 }
 
 class _GalleryView extends StatefulWidget {
@@ -257,7 +392,6 @@ class _GalleryView extends StatefulWidget {
     required this.preferences,
     required this.anchors,
     required this.loadKnowledge,
-    required this.hasLiveKnowledgePage,
     this.visible = true,
     this.onDisableBeta,
     this.openWebLink,
@@ -268,7 +402,6 @@ class _GalleryView extends StatefulWidget {
   final GalleryPreferences preferences;
   final _GalleryAnchorRegistry anchors;
   final Future<GalleryKnowledgeIndex> Function() loadKnowledge;
-  final bool hasLiveKnowledgePage;
   final bool visible;
   final VoidCallback? onDisableBeta;
   final Future<void> Function(Uri)? openWebLink;
@@ -319,9 +452,19 @@ class _GalleryViewState extends State<_GalleryView> {
       const GallerySpendingSelection.all();
   Future<GalleryKnowledgeIndex>? _liveKnowledgeBrowse;
   KnowledgeBase? _browsedKnowledge;
-  double _detailScrollDeficit = 0;
-  double _detailMaxExtent = 0;
-  double _detailShrinkDistance = 0;
+
+  /// 城市详情页滚动：线路卡按需构建，从搜索定位到指定线路时靠它逐屏
+  /// 滚动到目标卡片（滚动位置仍由 PageStorageKey 保存恢复）。
+  final ScrollController _knowledgeScroll = ScrollController();
+  int _knowledgeRevealToken = -1;
+  GlobalKey? _knowledgeRevealKey;
+
+  @override
+  void dispose() {
+    _knowledgeScroll.dispose();
+    super.dispose();
+  }
+
   void _updateDetail(VoidCallback update) => setState(update);
 
   Future<void> _pickFaceImage() async {
@@ -355,27 +498,15 @@ class _GalleryViewState extends State<_GalleryView> {
           final data = await frame.image.toByteData(
             format: ImageByteFormat.png,
           );
-          if (data != null) {
+          if (data != null && active()) {
             // The native picker clears its previous cache on each selection.
             // The bytes stay in a crop session until the sheet's 完成 commits
-            // them (spec 2.4 §8.2). Sample the Monet seed now, while the picker
-            // is still busy, so the committed theme switches exactly once.
-            final bytes = data.buffer.asUint8List(
-              data.offsetInBytes,
-              data.lengthInBytes,
+            // them (spec 2.4 §8.2).
+            c.beginFaceCrop(
+              card.id,
+              data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+              Size(frame.image.width.toDouble(), frame.image.height.toDouble()),
             );
-            final seed = await GalleryMonet.seedFromImage(bytes);
-            if (active()) {
-              c.beginFaceCrop(
-                card.id,
-                bytes,
-                Size(
-                  frame.image.width.toDouble(),
-                  frame.image.height.toDouble(),
-                ),
-                seed: seed,
-              );
-            }
           }
         } finally {
           frame.image.dispose();
@@ -400,8 +531,7 @@ class _GalleryViewState extends State<_GalleryView> {
 
   bool _importingRecords = false;
 
-  /// 导入与导出一样停留在预览层：读取用户选择的备份文件并展示内容，
-  /// 不覆盖当前内置样例。
+  /// 样例模式只预览文件名和卡片数量。
   Future<void> _importCardRecords() async {
     if (_importingRecords) return;
     setState(() => _importingRecords = true);
@@ -419,7 +549,7 @@ class _GalleryViewState extends State<_GalleryView> {
       }
       c.update(() {
         c.exportTitle = '导入预览';
-        c.exportText = '${document.name}\n$summary\n\n${document.content}';
+        c.exportText = '${document.name}\n$summary';
       }, '预览导入文件');
       c.showOverlay(GalleryOverlay.importPreview);
     } on MissingPluginException {
@@ -687,34 +817,37 @@ class _GalleryViewState extends State<_GalleryView> {
     c.showOverlay(type, card: card, anchor: rect, anchorId: anchor);
   }
 
-  Widget _page(GalleryPage page) => switch (page) {
-    GalleryPage.home => _home(),
-    GalleryPage.trips => _trips(),
-    GalleryPage.expert => _expert(),
-    GalleryPage.cards => _cards(),
-    GalleryPage.footprints => _footprints(),
-    GalleryPage.detail => _detail(),
-    GalleryPage.settings => _settings(),
-    GalleryPage.knowledge => _knowledge(),
-    GalleryPage.knowledgeSearch => _GalleryKnowledgeSearch(
-      load: widget.loadKnowledge,
-      onBack: c.back,
-      onResult: c.openKnowledgeResult,
-    ),
-    GalleryPage.knowledgeCity ||
-    GalleryPage.knowledgeLine ||
-    GalleryPage.knowledgeStation => _knowledgeDetails(_entry.knowledgeResult!),
-    GalleryPage.qr => _qr(),
-    GalleryPage.feedback => _feedback(),
-    GalleryPage.acknowledgements => _acknowledgements(),
-    GalleryPage.licenses => _licensePage(),
-  };
+  Widget _page(GalleryPage page) {
+    final live = _GalleryLiveScope.of(context);
+    return switch (page) {
+      GalleryPage.home => _home(),
+      GalleryPage.trips => _trips(),
+      GalleryPage.expert => _expert(),
+      GalleryPage.cards => _cards(),
+      GalleryPage.footprints => _footprints(),
+      GalleryPage.detail => _detail(),
+      GalleryPage.settings => _settings(),
+      GalleryPage.knowledge => _knowledge(),
+      GalleryPage.knowledgeSearch => _GalleryKnowledgeSearch(
+        load: widget.loadKnowledge,
+        onBack: c.back,
+        onResult: c.openKnowledgeResult,
+        revision: live?.app.knowledgeBase,
+      ),
+      GalleryPage.knowledgeCity => _knowledgeCityPage(),
+      GalleryPage.qr => _qr(),
+      GalleryPage.feedback => _feedback(),
+      GalleryPage.acknowledgements => _acknowledgements(),
+      GalleryPage.licenses => _licensePage(),
+    };
+  }
 
   Widget _list(
     List<Widget> children, {
     String? id,
     double? bottom,
     String? positionId,
+    Widget? leadingSliver,
   }) {
     final key = PageStorageKey(
       'gallery-${c.generation}-${id ?? '${_viewPage.name}-${_entry.qrView}'}',
@@ -734,6 +867,7 @@ class _GalleryViewState extends State<_GalleryView> {
         listKey: key,
         positionId: positionId,
         padding: padding,
+        leadingSliver: leadingSliver,
         children: children,
       );
     }

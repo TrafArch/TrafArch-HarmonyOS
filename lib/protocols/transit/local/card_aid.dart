@@ -45,6 +45,8 @@ class CardAid {
     0x10,
     0x02,
   ];
+
+  /// Suzhou citizen card default PIN 123456, encoded as BCD.
   static final List<int> suzhouPinVerify = const [
     0x00,
     0x20,

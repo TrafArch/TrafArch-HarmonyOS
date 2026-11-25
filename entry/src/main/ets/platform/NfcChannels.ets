@@ -2,7 +2,16 @@ import { bundleManager } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
 import { AsyncCallback } from '@kit.BasicServicesKit';
 import { nfcController, tag } from '@kit.ConnectivityKit';
-import { BinaryMessenger, MethodCall, MethodChannel, MethodResult } from '@ohos/flutter_ohos';
+import {
+  Any,
+  BinaryMessenger,
+  EventChannel,
+  EventSink,
+  MethodCall,
+  MethodChannel,
+  MethodResult,
+  StreamHandler
+} from '@ohos/flutter_ohos';
 
 class ScanSession {
   readonly id: string;
@@ -25,12 +34,16 @@ class ScanSession {
   }
 }
 
-export class NfcChannels {
+export class NfcChannels implements StreamHandler {
   private static released: Promise<boolean> = Promise.resolve(true);
   private readonly ordinary: MethodChannel;
   private readonly octopus: MethodChannel;
+  private readonly status: EventChannel;
   private readonly element: bundleManager.ElementName;
   private readonly sessions = new Map<string, ScanSession>();
+  private statusSink?: EventSink;
+  private lastStatus?: string;
+  private adapterCallback?: (state: nfcController.NfcState) => void;
   private active?: ScanSession;
   private foreground = false;
   private disposed = false;
@@ -39,8 +52,23 @@ export class NfcChannels {
     this.element = element;
     this.ordinary = new MethodChannel(messenger, 'transit_card_analyzer/nfc');
     this.octopus = new MethodChannel(messenger, 'transit_card_analyzer/octopus_nfc');
+    this.status = new EventChannel(messenger, 'transit_card_analyzer/nfc_status');
+    this.status.setStreamHandler(this);
     this.bind(this.ordinary, false);
     this.bind(this.octopus, true);
+  }
+
+  onListen(_args: Any, events: EventSink): void {
+    this.statusSink = undefined;
+    this.refreshAdapterStatus();
+    this.statusSink = events;
+    if (this.lastStatus !== undefined) events.success(this.lastStatus);
+    this.startAdapterListener();
+  }
+
+  onCancel(_args: Any): void {
+    this.statusSink = undefined;
+    this.stopAdapterListener();
   }
 
   setForeground(foreground: boolean): void {
@@ -56,10 +84,47 @@ export class NfcChannels {
 
   dispose(): void {
     this.disposed = true;
+    this.statusSink = undefined;
+    this.stopAdapterListener();
     if (this.active !== undefined) this.retire(this.active);
     this.ordinary.setMethodCallHandler(null);
     this.octopus.setMethodCallHandler(null);
     this.sessions.clear();
+  }
+
+  private startAdapterListener(): void {
+    if (this.adapterCallback !== undefined) return;
+    try {
+      const callback = (_state: nfcController.NfcState): void => {
+        this.refreshAdapterStatus();
+      };
+      nfcController.on('nfcStateChange', callback);
+      this.adapterCallback = callback;
+    } catch (_) {}
+  }
+
+  private stopAdapterListener(): void {
+    const callback = this.adapterCallback;
+    if (callback === undefined) return;
+    this.adapterCallback = undefined;
+    try {
+      nfcController.off('nfcStateChange', callback);
+    } catch (_) {}
+  }
+
+  private refreshAdapterStatus(): void {
+    let status = 'unavailable';
+    try {
+      if (canIUse('SystemCapability.Communication.NFC.Core') && nfcController.isNfcSupported()) {
+        status = nfcController.getNfcState() === nfcController.NfcState.STATE_ON ?
+          'enabled' : 'disabled';
+      }
+    } catch (_) {
+      status = 'unavailable';
+    }
+    if (status === this.lastStatus) return;
+    this.lastStatus = status;
+    this.statusSink?.success(status);
   }
 
   private bind(channel: MethodChannel, felicaOnly: boolean): void {

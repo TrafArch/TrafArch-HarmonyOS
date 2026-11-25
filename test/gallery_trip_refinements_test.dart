@@ -8,6 +8,8 @@ import 'package:transit_card_analyzer/features/trips/journey_transport_icon.dart
 import 'package:transit_card_analyzer/gallery/gallery_app.dart';
 import 'package:transit_card_analyzer/gallery/gallery_controller.dart';
 import 'package:transit_card_analyzer/gallery/gallery_data.dart';
+import 'package:transit_card_analyzer/gallery/gallery_design.dart';
+import 'package:transit_card_analyzer/gallery/gallery_rail_line_catalog.dart';
 import 'package:transit_card_analyzer/gallery/gallery_theme.dart';
 
 import 'support/gallery_scroll.dart';
@@ -27,16 +29,21 @@ void main() {
   });
   tearDown(() => controller.dispose());
 
-  Future<void> mount(WidgetTester tester) async {
+  Future<void> mount(
+    WidgetTester tester, {
+    GalleryRailLineCatalog? railLineCatalog,
+  }) async {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(412, 892);
     addTearDown(tester.view.reset);
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
-    await tester.pumpWidget(GalleryApp(controller: controller));
+    await tester.pumpWidget(
+      GalleryApp(controller: controller, railLineCatalog: railLineCatalog),
+    );
     await tester.pumpAndSettle();
   }
 
-  testWidgets('trip reference typography keeps arrival regular', (
+  testWidgets('trip reference typography bolds stations and trims the clock', (
     tester,
   ) async {
     await mount(tester);
@@ -57,14 +64,14 @@ void main() {
     );
     expect(
       tester.widget<Text>(find.text('徐家汇').first).style!.fontWeight,
-      FontWeight.w400,
+      FontWeight.w600,
     );
     for (final (value, size, lineHeight, weight) in [
-      ('今天', 26.0, 32.0, FontWeight.w600),
-      ('08:07', 16.0, 22.0, FontWeight.w400),
-      ('08:42', 16.0, 22.0, FontWeight.w400),
-      ('未记录', 16.0, 22.0, FontWeight.w400),
-      ('徐家汇', 18.0, 26.0, FontWeight.w400),
+      ('今天', 18.0, 26.0, FontWeight.w600),
+      ('08:07', 14.0, 20.0, FontWeight.w400),
+      ('08:42', 14.0, 20.0, FontWeight.w400),
+      ('未记录', 14.0, 20.0, FontWeight.w400),
+      ('徐家汇', 18.0, 26.0, FontWeight.w600),
       ('轨道交通', 16.0, 22.0, FontWeight.w400),
       ('上海', 14.0, 20.0, FontWeight.w400),
       ('−¥4.00', 18.0, 24.0, FontWeight.w400),
@@ -83,18 +90,71 @@ void main() {
     await tester.tap(find.text('陆家嘴'));
     await tester.pumpAndSettle();
     for (final text in tester.widgetList<Text>(find.text('08:42'))) {
-      expect(text.style!.fontSize, 16);
+      expect(text.style!.fontSize, 14);
       expect(text.style!.fontWeight, FontWeight.w400);
     }
     controller.back();
     await tester.pumpAndSettle();
     controller.openCard(controller.current);
     await tester.pumpAndSettle();
-    expect(tester.widget<Text>(find.text('今天')).style!.fontSize, 26);
+    expect(tester.widget<Text>(find.text('今天')).style!.fontSize, 18);
     expect(
       tester.widget<Text>(find.text('08:42')).style!.fontWeight,
       FontWeight.w400,
     );
+  });
+
+  testWidgets('date group headings track the section role and large fonts', (
+    tester,
+  ) async {
+    await mount(tester);
+    final heading = find.byKey(const ValueKey('trip-date-今天'));
+    expect(heading, findsOneWidget);
+    final label = find.descendant(of: heading, matching: find.text('今天'));
+    final style = tester.widget<Text>(label).style!;
+    expect(style.fontSize, GalleryTypography.section.fontSize);
+    expect(style.height, 26 / 18);
+    expect(style.fontWeight, FontWeight.w600);
+    for (final scale in [1.5, 2.0]) {
+      tester.platformDispatcher.textScaleFactorTestValue = scale;
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: '$scale');
+      final box = tester.getRect(heading);
+      final text = tester.getRect(label);
+      // 标题在自身留白内完整绘制，未被裁切。
+      expect(box.contains(text.topLeft), isTrue, reason: '$scale');
+      expect(
+        box.contains(text.bottomRight - const Offset(.1, .1)),
+        isTrue,
+        reason: '$scale',
+      );
+      expect(text.height, greaterThanOrEqualTo(18 * scale));
+    }
+    tester.platformDispatcher.clearTextScaleFactorTestValue();
+    controller.openCard(controller.current);
+    await tester.pumpAndSettle();
+    for (final text in tester.widgetList<Text>(find.text('今天'))) {
+      expect(text.style!.fontSize, GalleryJourneyTypography.date.fontSize);
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('trip rows drop seconds from recorded clock times', (
+    tester,
+  ) async {
+    final sample = {
+      ...controller.trips.first,
+      'entryTime': '08:07:45',
+      'time': '08:42:10',
+    };
+    controller.trips
+      ..clear()
+      ..add(sample);
+    await mount(tester);
+    expect(find.text('08:07'), findsWidgets);
+    expect(find.text('08:42'), findsWidgets);
+    expect(find.text('08:07:45'), findsNothing);
+    expect(find.text('08:42:10'), findsNothing);
   });
 
   testWidgets('logo follows spending city and preserves the existing badge', (
@@ -142,6 +202,116 @@ void main() {
     // The card issuer remains Shanghai while the ticket uses Beijing's logo.
     expect(controller.current.city, '上海');
   });
+
+  testWidgets(
+    'rail endpoints use local SVG art and fall back to the pinned line colour',
+    (tester) async {
+      final base = controller.trips.first;
+      controller.trips
+        ..clear()
+        ..add({
+          ...base,
+          'kind': 'rail',
+          'city': '福州',
+          'isCrossCity': false,
+          'entryLine': '4号线',
+          'exitLine': '滨海快线',
+          'entryLineCity': {'system': 'tu', 'code': '3910', 'name': '福州'},
+          'exitLineCity': {'system': 'tu', 'code': '3910', 'name': '福州'},
+        });
+      await mount(
+        tester,
+        railLineCatalog: GalleryRailLineCatalog.fromJson(
+          jsonDecode(File('assets/Line_Icon/icons.json').readAsStringSync())
+              as Map<String, dynamic>,
+          jsonDecode(
+            File('third_party/railmapgen_palette/tu_colors.json')
+                .readAsStringSync(),
+          ) as Map<String, dynamic>,
+        ),
+      );
+
+      for (final (key, asset) in [
+        ('trip-entry-line-badge', 'assets/Line_Icon/3910/3910_Line_4.svg'),
+        ('trip-exit-line-badge', 'assets/Line_Icon/3910/3910_Line_F1.svg'),
+      ]) {
+        final badge = find.byKey(ValueKey(key));
+        final picture = find.descendant(
+          of: badge,
+          matching: find.byType(SvgPicture),
+        );
+        for (
+          var attempt = 0;
+          attempt < 20 && picture.evaluate().isEmpty;
+          attempt++
+        ) {
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+        expect(picture, findsOneWidget);
+        expect(
+          (tester.widget<SvgPicture>(picture).bytesLoader as SvgAssetLoader)
+              .assetName,
+          asset,
+        );
+        final size = tester.getSize(picture);
+        expect(size.height, closeTo(24, .1));
+        expect(size.width / size.height, closeTo(157.6 / 94.2, .01));
+      }
+
+      controller.update(
+        () => controller.trips[0] = {
+          ...controller.trips[0],
+          'city': '上海',
+          'entryLine': '4号线',
+          'exitLine': '4号线',
+          'entryLineCity': {'system': 'tu', 'code': '2900', 'name': '上海'},
+          'exitLineCity': {'system': 'tu', 'code': '2900', 'name': '上海'},
+        },
+      );
+      await tester.pumpAndSettle();
+      final colour = const Color(0xff461d84);
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is DecoratedBox &&
+              (widget.decoration as BoxDecoration).color == colour,
+        ),
+        findsNWidgets(2),
+      );
+      for (final text in tester.widgetList<Text>(find.text('4号线'))) {
+        expect(text.style!.color, Colors.white);
+      }
+
+      controller.update(
+        () => controller.trips[0] = {
+          ...controller.trips[0],
+          'city': '福州',
+          'entryLine': '4号线',
+          'exitLine': '滨海快线',
+          'entryLineCity': {'system': 'tu', 'code': '3910', 'name': '福州'},
+          'exitLineCity': {'system': 'tu', 'code': '3910', 'name': '福州'},
+        },
+      );
+      tester.view.physicalSize = const Size(240, 1000);
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('trip-entry-line-badge')),
+          matching: find.byType(SvgPicture),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('trip-exit-line-badge')),
+          matching: find.byType(SvgPicture),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets(
     'unknown, multi-city and cross-city rail keep the themed fallback and bus stays unchanged',
@@ -203,13 +373,16 @@ void main() {
       findsNothing,
     );
     for (final value in ['07:52', '49 路', '汉口路江西中路']) {
-      expect(find.descendant(of: row, matching: find.text(value)), findsOneWidget);
+      expect(
+        find.descendant(of: row, matching: find.text(value)),
+        findsOneWidget,
+      );
     }
     final time = tester.widget<Text>(
       find.descendant(of: row, matching: find.text('07:52')),
     );
-    // 单向公交仅记录上车，时间与常规时间同为 16dp 且不加粗。
-    expect(time.style!.fontSize, 16);
+    // 单向公交仅记录上车，时间与常规时间同为 14dp 且不加粗。
+    expect(time.style!.fontSize, 14);
     expect(time.style!.fontWeight, FontWeight.w400);
     expect(find.text('公交'), findsWidgets);
     expect(find.text('上海'), findsWidgets);
@@ -277,6 +450,7 @@ void main() {
       await tester.tap(find.text('陆家嘴'));
       await tester.pumpAndSettle();
       expect(controller.overlay, GalleryOverlay.trip);
+      expect(find.textContaining('本行程为内置样例摘要'), findsNothing);
       expect(find.text('未记录换乘站'), findsOneWidget);
       expect(find.text('0x18 交易 / 0x1E 过程'), findsOneWidget);
       expect(jsonEncode(controller.trips), original);

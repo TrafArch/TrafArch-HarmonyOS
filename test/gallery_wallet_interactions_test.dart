@@ -272,6 +272,57 @@ void main() {
   );
 
   testWidgets(
+    'wallet card name uses the 18sp list style and wraps long names',
+    (tester) async {
+      final card = c.current;
+      card
+        ..name = '我的上海市公共交通卡（通勤专用）'
+        ..saved = true;
+      c.hasRead = true;
+      await mount(tester);
+      final walletTitle = find.descendant(
+        of: find.byKey(ValueKey('wallet-card-${card.id}')),
+        matching: find.text(card.name),
+      );
+      final walletStyle = tester.widget<Text>(walletTitle).style!;
+      // 卡包列表卡名 18sp / 24 行高，保留 w600 与颜色逻辑。
+      expect(walletStyle.fontSize, 18);
+      expect(walletStyle.height, 24 / 18);
+      expect(walletStyle.fontWeight, FontWeight.w600);
+      // 长卡名换行不截断。
+      expect(tester.widget<Text>(walletTitle).maxLines, isNull);
+      expect(
+        tester.widget<Text>(walletTitle).overflow,
+        isNot(TextOverflow.ellipsis),
+      );
+      expect(tester.takeException(), isNull);
+      // 卡名与下方余额的间距保持 4。
+      final amount = tester.getRect(
+        find.byKey(ValueKey('wallet-number-${card.id}')),
+      );
+      expect(amount.top - tester.getRect(walletTitle).bottom, closeTo(4, .5));
+      // 系统大字体缩放不影响字号 token，也不产生溢出。
+      for (final scale in [1.5, 2.0]) {
+        tester.platformDispatcher.textScaleFactorTestValue = scale;
+        c.update(() {});
+        await tester.pumpAndSettle();
+        expect(tester.widget<Text>(walletTitle).style!.fontSize, 18);
+        expect(tester.takeException(), isNull);
+      }
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
+      c.navigate(GalleryPage.home);
+      await tester.pumpAndSettle();
+      final faceStyle = tester
+          .widget<Text>(find.byKey(ValueKey('face-title-${card.id}')))
+          .style!;
+      // 首页卡面标题保持 20sp，列表卡名 18sp 应小于它。
+      expect(faceStyle.fontSize, 20);
+      expect(walletStyle.fontSize, lessThan(faceStyle.fontSize!));
+      expect(walletStyle.fontWeight, faceStyle.fontWeight);
+    },
+  );
+
+  testWidgets(
     'reduced motion deletes immediately and expired feedback cannot restore a card',
     (tester) async {
       await mount(tester, reduced: true);

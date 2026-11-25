@@ -13,7 +13,6 @@ void main() {
   runApp(
     const LegalConsentGate(
       screenBuilder: GalleryConsentScreen.new,
-      enableAnalytics: false,
       child: GalleryApp(),
     ),
   );

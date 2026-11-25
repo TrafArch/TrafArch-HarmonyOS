@@ -146,7 +146,10 @@ extension _GalleryOverlays on _GalleryViewState {
   String _overlayTitle(GalleryOverlay type) => switch (type) {
     GalleryOverlay.save => '保存卡片',
     GalleryOverlay.face => '更换卡面',
-    GalleryOverlay.trip => '行程详情',
+    GalleryOverlay.trip =>
+      _entry.trip?['kind'] == 'recharge' || _entry.trip?['kind'] == 'other'
+          ? '交易详情'
+          : '行程详情',
     GalleryOverlay.cardMenu => '卡片管理',
     GalleryOverlay.rename => '重命名',
     GalleryOverlay.delete => '删除本卡',
@@ -154,7 +157,6 @@ extension _GalleryOverlays on _GalleryViewState {
     GalleryOverlay.mode => '交通方式',
     GalleryOverlay.export => _entry.exportTitle,
     GalleryOverlay.importPreview => _entry.exportTitle,
-    GalleryOverlay.rawFeedback => '反馈内容预览',
     GalleryOverlay.contributors => '贡献者',
     GalleryOverlay.licenseDetail => '许可证详情',
   };
@@ -168,23 +170,36 @@ extension _GalleryOverlays on _GalleryViewState {
       initialName: c.current.name,
       onCancel: c.back,
       onSubmit: (name) async {
-        if (!c.isLive) {
+        final live = _GalleryLiveScope.of(context);
+        if (live == null) {
           c.save(name);
           _toast('已保存到卡包');
           return;
         }
-        final saved = await c.saveCurrent(name);
-        if (!mounted || saved) return;
-        _toast('未能确认保存，请检查卡包', type: GalleryFeedbackType.error);
+        live.conflictResolver = _resolveLiveConflict;
+        await live.save(name);
+        _toast(
+          live.lastSaveMessage ??
+              (live.lastSaveSucceeded == true ? '已保存到卡包' : '卡片保存未完成'),
+          type: live.lastSaveSucceeded == true
+              ? GalleryFeedbackType.success
+              : GalleryFeedbackType.error,
+        );
       },
     ),
     GalleryOverlay.rename => _GalleryNameForm(
       key: ValueKey('rename-${_selectedCard.id}-${c.generation}'),
       initialName: _selectedCard.name,
       onCancel: c.back,
-      onSubmit: (name) {
-        c.rename(name);
-        _toast('已更新模拟卡片名称');
+      onSubmit: (name) async {
+        final live = _GalleryLiveScope.of(context);
+        if (live == null) {
+          c.rename(name);
+          _toast('已更新模拟卡片名称');
+          return;
+        }
+        await live.rename(name);
+        _toast('已更新卡片名称');
       },
     ),
     GalleryOverlay.delete => Column(
@@ -192,7 +207,13 @@ extension _GalleryOverlays on _GalleryViewState {
       children: [
         _text('删除“${_selectedCard.name}”及其本次会话记录？', size: 14),
         _gap(8),
-        _text('仅影响当前内存样例。', role: GalleryTypography.caption, color: t.muted),
+        _text(
+          _GalleryLiveScope.of(context) == null
+              ? '仅影响当前内存样例。'
+              : '将删除本机档案、读取批次与保存的行程证据，且无法撤销。',
+          role: GalleryTypography.caption,
+          color: t.muted,
+        ),
         _gap(22),
         Row(
           children: [
@@ -225,29 +246,9 @@ extension _GalleryOverlays on _GalleryViewState {
     GalleryOverlay.importPreview => Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _text(
-          '文件内容预览 · 不会修改当前样例',
-          role: GalleryTypography.caption,
-          color: t.warn,
-        ),
+        _text('文件摘要', role: GalleryTypography.caption, color: t.muted),
         _gap(14),
-        _hexBox(_entry.exportText),
-        _gap(14),
-        _button('关闭预览', c.back, primary: true),
-      ],
-    ),
-    GalleryOverlay.rawFeedback => Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _text(
-          '反馈草稿保留在本页，不会自动提交。',
-          role: GalleryTypography.label,
-          color: t.muted,
-        ),
-        _gap(14),
-        _hexBox(
-          'TrafArch 2.x 界面\n设计版本：2.4.0\n场景：${c.sceneId ?? c.page.name}\n数据：内置样例\n\n请描述看到的问题、操作步骤和期望结果。',
-        ),
+        _text(_entry.exportText, role: GalleryTypography.body),
         _gap(14),
         _button('关闭预览', c.back, primary: true),
       ],
@@ -346,6 +347,21 @@ extension _GalleryOverlays on _GalleryViewState {
     ];
   }
 
+  Future<ArchiveConflictPolicy?> _resolveLiveConflict() =>
+      showDialog<ArchiveConflictPolicy>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          title: const Text('记录已存在'),
+          children: [
+            for (final policy in ArchiveConflictPolicy.values)
+              ListTile(
+                title: Text(policy.label),
+                onTap: () => Navigator.pop(context, policy),
+              ),
+          ],
+        ),
+      );
+
   Widget _dropdownFocus(Widget child) => FocusScope(
     autofocus: true,
     child: Focus(
@@ -386,8 +402,13 @@ extension _GalleryOverlays on _GalleryViewState {
     }
     final source = type == GalleryOverlay.source;
     final selected = source ? c.source : c.mode;
-    return (c.data.json[source ? 'sources' : 'modes'] as List)
-        .cast<String>()
+    final live = _GalleryLiveScope.of(context);
+    final values = live == null
+        ? (c.data.json[source ? 'sources' : 'modes'] as List).cast<String>()
+        : source
+        ? live.sources
+        : live.modes;
+    return values
         .map(
           (value) => _dropdownItem(
             value,
@@ -462,21 +483,24 @@ extension _GalleryOverlays on _GalleryViewState {
           '记录来源',
           ((trip['sources'] as List?) ?? [trip['source'] ?? '未记录']).join(' / '),
         ),
-        _kv(
-          '交通方式',
-          trip['mode'] as String? ??
-              (trip['kind'] == 'rail' ? '城市轨道交通' : '公共汽电车'),
-        ),
+        if (trip['kind'] == 'recharge')
+          _kv('交易类型', '充值')
+        else
+          _kv(
+            '交通方式',
+            trip['mode'] as String? ??
+                switch (trip['kind']) {
+                  'rail' => '城市轨道交通',
+                  'bus' => '公共汽电车',
+                  _ => '其他',
+                },
+          ),
+        if (trip['kind'] == 'recharge' || trip['kind'] == 'other')
+          _kv('交易时间', trip['time'] as String?),
         _kv('受理城市', trip['city'] as String? ?? '未记录'),
         _kv('交易金额', trip['amount'] as String?),
         if (trip['kind'] != 'event')
           _kv('交易后余额', trip['balanceAfter'] as String?),
-        _gap(16),
-        _text(
-          c.isLive ? '显示本次读取可确认的记录字段。' : '本行程为内置样例摘要。未保留各侧原始字段，不据此补造记录。',
-          role: GalleryTypography.caption,
-          color: t.muted,
-        ),
       ],
     );
   }
@@ -517,15 +541,23 @@ extension _GalleryOverlays on _GalleryViewState {
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 3),
                         child: TextButton(
-                          onPressed: () => c.update(() {
-                            _selectedCard.face = pair.$1;
-                            _selectedCard.image = null;
-                            _selectedCard.imageSize = null;
-                            _selectedCard.detailCrop = const GalleryFaceCrop();
-                            _selectedCard.listCrop = const GalleryFaceCrop();
-                            _selectedCard.monetSeed = null;
-                            c.faceCrop = null;
-                          }),
+                          onPressed: () {
+                            final card = _selectedCard;
+                            c.update(() {
+                              card.face = pair.$1;
+                              card.image = null;
+                              card.imageSize = null;
+                              card.detailCrop = const GalleryFaceCrop();
+                              card.listCrop = const GalleryFaceCrop();
+                              c.faceCrop = null;
+                            });
+                            unawaited(
+                              _preferences.clearFaceImage(card.id).then((_) {
+                                final error = _preferences.faceError;
+                                if (error != null && mounted) _toast(error);
+                              }),
+                            );
+                          },
                           style: TextButton.styleFrom(
                             padding: const EdgeInsets.all(4),
                             shape: RoundedRectangleBorder(
@@ -578,7 +610,7 @@ extension _GalleryOverlays on _GalleryViewState {
         ],
         _gap(8),
         _text(
-          '仅在本次界面会话中使用，不上传图片',
+          '卡面图片及裁切设置保存在本机，不会上传',
           role: GalleryTypography.caption,
           color: t.muted,
         ),

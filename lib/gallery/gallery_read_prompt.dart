@@ -58,8 +58,8 @@ class _GalleryReadFlowState extends State<_GalleryReadFlow>
     } else {
       _visibility.animateBack(
         0,
-        duration: const Duration(milliseconds: 160),
-        curve: Curves.easeInCubic,
+        duration: _GalleryMotion.content,
+        curve: _GalleryMotion.accelerate,
       );
     }
   }
@@ -77,8 +77,8 @@ class _GalleryReadFlowState extends State<_GalleryReadFlow>
     });
     _visibility.animateTo(
       1,
-      duration: const Duration(milliseconds: 400),
-      curve: Curves.easeOutCubic,
+      duration: _GalleryMotion.slow,
+      curve: _GalleryMotion.decelerate,
     );
   }
 
@@ -113,7 +113,7 @@ class _GalleryReadFlowState extends State<_GalleryReadFlow>
         : AnimatedSize(
             key: const ValueKey('home-read-layout'),
             duration: _GalleryMotion.readResult,
-            curve: Curves.easeInOutCubicEmphasized,
+            curve: _GalleryMotion.readCurve,
             alignment: Alignment.topCenter,
             child: content,
           );
@@ -126,9 +126,19 @@ class _GalleryReadPrompt extends StatefulWidget {
     required this.reading,
     required this.failed,
     required this.compact,
+    required this.nfcMessage,
+    required this.failureMessage,
+    this.progress,
   });
   final bool reading, failed;
   final bool compact;
+  final String? nfcMessage;
+  final String? failureMessage;
+
+  /// Reader percentage (0–100) of the attempt in flight. Null keeps the loop
+  /// animation: the card has not been discovered yet, so there is no honest
+  /// percentage to show.
+  final int? progress;
 
   @override
   State<_GalleryReadPrompt> createState() => _GalleryReadPromptState();
@@ -138,16 +148,16 @@ class _GalleryReadPromptState extends State<_GalleryReadPrompt>
     with TickerProviderStateMixin {
   late final _morph = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 560),
+    duration: _GalleryMotion.readMorph,
     value: widget.reading ? 1 : 0,
   );
   late final _loop = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 2800),
+    duration: _GalleryMotion.readLoop,
   );
   late final _failure = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 520),
+    duration: _GalleryMotion.readFailure,
     value: widget.failed ? 1 : 0,
   );
   bool _reduceMotion = false;
@@ -174,7 +184,7 @@ class _GalleryReadPromptState extends State<_GalleryReadPrompt>
     if (_reduceMotion) {
       _morph.value = target;
     } else if (_morph.value != target) {
-      _morph.animateTo(target, curve: Curves.easeInOutCubicEmphasized);
+      _morph.animateTo(target, curve: _GalleryMotion.readCurve);
     }
     if (widget.reading && !_reduceMotion) {
       if (!_loop.isAnimating) _loop.repeat();
@@ -202,15 +212,19 @@ class _GalleryReadPromptState extends State<_GalleryReadPrompt>
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).extension<GalleryTokens>()!;
-    final title = widget.reading
-        ? '把交通卡贴近手机背面'
-        : widget.failed
-        ? '未能读到卡片'
-        : '贴卡，了解你的每一次出行';
+    final percent = widget.progress?.clamp(0, 100).toInt();
+    final fraction = percent == null ? null : percent / 100;
+    final title =
+        widget.nfcMessage ??
+        (widget.reading
+            ? '把交通卡贴近手机背面'
+            : widget.failed
+            ? '未能读到卡片'
+            : '贴卡，了解你的每一次出行');
     final subtitle = widget.reading
         ? '正在读取余额与行程\n请保持贴卡，直到读取完成'
         : widget.failed
-        ? '调整卡片位置后再试一次'
+        ? widget.failureMessage ?? '调整卡片位置后再试一次'
         : '支持交通联合、城市一卡通\n及部分 FeliCa 卡片';
     return Column(
       key: const ValueKey('home-read-prompt'),
@@ -225,10 +239,13 @@ class _GalleryReadPromptState extends State<_GalleryReadPrompt>
                 final approach = _reduceMotion
                     ? 1.0
                     : phase < .4
-                    ? Curves.easeInOutCubicEmphasized.transform(phase / .4)
+                    ? _GalleryMotion.readCurve.transform(phase / .4)
                     : phase < .78
                     ? 1.0
-                    : 1 - Curves.easeInOutCubic.transform((phase - .78) / .22);
+                    : 1 -
+                          _GalleryMotion.standard.transform(
+                            (phase - .78) / .22,
+                          );
                 return SizedBox(
                   key: const ValueKey('home-read-illustration'),
                   width: 240,
@@ -344,7 +361,7 @@ class _GalleryReadPromptState extends State<_GalleryReadPrompt>
                               right: 48,
                               bottom: 12,
                               child: Transform.scale(
-                                scale: Curves.easeOutCubic.transform(
+                                scale: _GalleryMotion.decelerate.transform(
                                   _failure.value,
                                 ),
                                 child: Container(
@@ -379,17 +396,44 @@ class _GalleryReadPromptState extends State<_GalleryReadPrompt>
         if (widget.reading)
           Padding(
             padding: const EdgeInsets.fromLTRB(40, 12, 40, 0),
-            child: TickerMode(
-              enabled: !_reduceMotion,
-              child: LinearProgressIndicator(
-                key: const ValueKey('home-read-progress'),
-                minHeight: 4,
-                borderRadius: BorderRadius.circular(2),
-                color: t.action,
-                backgroundColor: t.tone,
-                semanticsLabel: '正在读取卡片',
-                semanticsValue: '读取中',
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // The caption row is reserved even before the first real
+                // percentage, so null → value does not move the bar.
+                SizedBox(
+                  height: 18,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    // The bar announces the same percentage; this caption is
+                    // the visual copy only.
+                    child: ExcludeSemantics(
+                      child: Text(
+                        percent == null ? '' : '$percent%',
+                        key: const ValueKey('home-read-percent'),
+                        style: GalleryTypography.caption.copyWith(
+                          color: t.muted,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                TickerMode(
+                  enabled: !_reduceMotion,
+                  child: LinearProgressIndicator(
+                    key: const ValueKey('home-read-progress'),
+                    // A reported percentage is real progress; until the card is
+                    // discovered the bar keeps its indeterminate loop.
+                    value: fraction,
+                    minHeight: 4,
+                    borderRadius: BorderRadius.circular(2),
+                    color: t.action,
+                    backgroundColor: t.tone,
+                    semanticsLabel: '正在读取卡片',
+                    semanticsValue: percent == null ? '读取中' : '$percent%',
+                  ),
+                ),
+              ],
             ),
           )
         else

@@ -39,6 +39,60 @@ class GalleryFaceCrop {
 /// A frozen design snapshot. This loader never opens production reference DBs.
 class GalleryData {
   GalleryData(this.json);
+  GalleryData.empty()
+    : json = const {'cards': [], 'trips': [], 'footprints': []};
+  GalleryData.live()
+    : json = {
+        'cards': [
+          {
+            'id': 'live-current',
+            'saved': false,
+            'name': '待读取',
+            'tail': '——',
+            'pan': '未提供',
+            'balance': '——',
+            'city': '未知',
+            'type': '交通卡',
+            'valid': '未知',
+            'when': '尚未读取',
+            'count': '0 条',
+            'face': 'blue',
+          },
+        ],
+        'trips': <GalleryRecord>[],
+        'ledgers': <String, dynamic>{},
+        'raw': <String, dynamic>{},
+        'rawFields': <dynamic>[],
+        'footprints': <GalleryRecord>[],
+        'palettes': <String, dynamic>{},
+        'sources': <String>['全部来源'],
+        'modes': <String>['全部方式'],
+        'expertTabs': <String>['信息获取', '交通数据解析', 'APDU / Raw Data'],
+        'knowledge': {
+          'captured': '',
+          'systems': {
+            for (final system in ['tu', 'cu'])
+              system: {
+                'name': system == 'tu' ? '交通联合' : '城市一卡通',
+                'formatVersion': 1,
+                'version': '不可用',
+                'source': '本地参考数据',
+                'sha256': '',
+                'regions': <GalleryRecord>[],
+                'entries': 0,
+              },
+          },
+        },
+        'qrValid': <String, dynamic>{},
+        'qrExpired': <String, dynamic>{},
+        'expert': {
+          'card': <GalleryRecord>[],
+          'bank': <GalleryRecord>[],
+          'felica': <GalleryRecord>[],
+          'transit': <GalleryRecord>[],
+        },
+        'scenes': <dynamic>[],
+      };
 
   final GalleryRecord json;
 
@@ -105,7 +159,6 @@ class GalleryScene {
 class GalleryCard {
   GalleryCard.fromJson(GalleryRecord json)
     : id = json['id'] as String,
-      liveCurrencyCode = null,
       saved = json['saved'] as bool,
       name = json['name'] as String,
       tail = json['tail'] as String,
@@ -119,6 +172,8 @@ class GalleryCard {
       face = json['face'] as String,
       detailCrop = const GalleryFaceCrop(),
       listCrop = const GalleryFaceCrop(),
+      _currencyCode = null,
+      _live = false,
       // Explicit applications win over the frozen sample's known identity.
       // A user-editable name is never evidence of a card's brand or protocol.
       applications = List.unmodifiable(
@@ -137,24 +192,25 @@ class GalleryCard {
 
   GalleryCard.live({
     required this.id,
+    required this.saved,
     required this.name,
-    this.saved = false,
-    this.pan = '未读取',
-    this.tail = '—',
-    this.rawBalance = '暂不可用',
-    this.city = '未知',
-    this.type = '未知',
-    this.valid = '—',
-    this.when = '',
-    this.count = '—',
-    this.face = 'blue',
-    this.applications = const [],
-    this.liveCurrencyCode = '',
-  }) : detailCrop = const GalleryFaceCrop(),
+    required this.tail,
+    required this.pan,
+    required this.rawBalance,
+    required this.city,
+    required this.type,
+    required this.valid,
+    required this.when,
+    required this.count,
+    required this.face,
+    required this.applications,
+    required String? currencyCode,
+  }) : _currencyCode = currencyCode,
+       _live = true,
+       detailCrop = const GalleryFaceCrop(),
        listCrop = const GalleryFaceCrop();
 
   final String id;
-  final String? liveCurrencyCode;
   bool saved;
   String name;
   final String tail;
@@ -166,15 +222,13 @@ class GalleryCard {
   final String when;
   final String count;
   final List<String> applications;
+  final String? _currencyCode;
+  final bool _live;
   String face;
   Uint8List? image;
   Size? imageSize;
   GalleryFaceCrop detailCrop;
   GalleryFaceCrop listCrop;
-
-  /// Seed extracted from [image] in this session (Monet Adaptive Canvas).
-  /// Preset gradient faces derive their seed from [face] instead.
-  Color? monetSeed;
 
   /// A session preview copy: shares the frozen identity fields while the
   /// cropper's temporary image and crop parameters stay uncommitted.
@@ -185,7 +239,6 @@ class GalleryCard {
     GalleryFaceCrop? detailCrop,
     GalleryFaceCrop? listCrop,
   }) : id = other.id,
-       liveCurrencyCode = other.liveCurrencyCode,
        saved = other.saved,
        name = other.name,
        tail = other.tail,
@@ -202,7 +255,8 @@ class GalleryCard {
        imageSize = imageSize ?? other.imageSize,
        detailCrop = detailCrop ?? other.detailCrop,
        listCrop = listCrop ?? other.listCrop,
-       monetSeed = other.monetSeed;
+       _currencyCode = other._currencyCode,
+       _live = other._live;
 
   /// Display precision only; the original captured label remains unchanged.
   String get readDateLabel {
@@ -218,18 +272,22 @@ class GalleryCard {
   }
 
   // These currencies belong to the frozen samples, not inferred real cards.
-  GalleryCurrency? get currency => switch (id) {
-    'shanghai' || 'shenzhen' => GalleryCurrency.cny,
-    'suica' => GalleryCurrency.jpy,
-    'octopus' => GalleryCurrency.hkd,
-    _ => null,
-  };
+  GalleryCurrency? get currency => _live
+      ? GalleryCurrency.fromCode(_currencyCode)
+      : switch (id) {
+          'shanghai' || 'shenzhen' => GalleryCurrency.cny,
+          'suica' => GalleryCurrency.jpy,
+          'octopus' => GalleryCurrency.hkd,
+          _ => null,
+        };
+
+  String? get currencyCode => _currencyCode;
 
   bool get unknownBalance => !RegExp(r'\d').hasMatch(rawBalance);
 
   String balance(bool includeOverdraft) {
+    if (_live) return rawBalance;
     if (unknownBalance) return '暂不可用';
-    if (liveCurrencyCode != null) return rawBalance;
     if (currency == GalleryCurrency.jpy) {
       return GalleryBalancePresentation.parse(
         rawBalance,
@@ -254,6 +312,12 @@ enum GalleryCurrency {
   hkd(100, '港元');
 
   const GalleryCurrency(this.scale, this.unit);
+  static GalleryCurrency? fromCode(String? code) => switch (code) {
+    'CNY' => cny,
+    'JPY' => jpy,
+    'HKD' => hkd,
+    _ => null,
+  };
   final int scale;
   final String unit;
 

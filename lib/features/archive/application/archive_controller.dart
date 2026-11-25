@@ -56,6 +56,7 @@ class ArchiveController extends OwnedNotifier {
     DateTime readAt,
     List<CapturedFrame> frames, {
     List<NfcMetadataIssue> metadataIssues = const [],
+    bool prepareSave = true,
   }) {
     if (disposed) return;
     final parsed = view.parsedCard;
@@ -77,7 +78,7 @@ class ArchiveController extends OwnedNotifier {
               metadataIssues,
             );
         if (item == null) return;
-        pending = item;
+        if (prepareSave) pending = item;
         fingerprint = item.fingerprint;
         identified = IdentifiedCard(
           fingerprint: item.fingerprint,
@@ -93,12 +94,17 @@ class ArchiveController extends OwnedNotifier {
       final identity = CardIdentificationService(view.knowledge)
           .identify(parsed, analysisIdentity: view.analysis?.identity);
       if (identity == null) return;
+      if (!prepareSave) {
+        identified = identity;
+        fingerprint = identity.fingerprint;
+        notifyListeners();
+        return;
+      }
       final balance = view.balanceInterpretation;
       final separateObservation =
           CardParserIds.isTUnionFamily(parsed.parserId) &&
           balance?.semantics != BalanceSemantics.direct;
-      final observedBalanceFen =
-          parsed.localCard?.info.observedBalance ?? parsed.info.balanceFen;
+      final observedBalanceFen = parsed.primaryBalanceFen;
       // Ordinary cards retain their established currency policy. Unknown TU
       // identities keep the integer but cannot acquire a currency from metadata.
       final currency = separateObservation
@@ -169,6 +175,7 @@ class ArchiveController extends OwnedNotifier {
         timeZoneOffsetMinutes: null,
         extensions: {
           'captureDeviceOffsetMinutes': readAt.timeZoneOffset.inMinutes,
+          'displayCardType': identity.identity.cardType,
           if (separateObservation) 'balanceInterpretation': balance!.toJson(),
         },
         clockBasis: 'device-local-card-time-unverified',
@@ -481,6 +488,7 @@ class ArchiveController extends OwnedNotifier {
     required DateTime readAt,
     required int balanceMinor,
     required String evidenceSource,
+    bool persistSaved = true,
   }) async {
     if (disposed || fingerprint != this.fingerprint) return;
     final verified = VerifiedAccountBalance(
@@ -509,6 +517,7 @@ class ArchiveController extends OwnedNotifier {
         notifyListeners();
       }
     }
+    if (!persistSaved) return;
     try {
       final saved = await (repository.db.select(
         repository.db.savedCards,
@@ -714,11 +723,11 @@ class ArchiveController extends OwnedNotifier {
       final now = DateTime.now();
       final content = buildArchiveHistoryExport(histories, exportedAt: now);
       final stamp = now.toIso8601String().replaceAll(RegExp(r'[^0-9]'), '');
-      final name = await exporter.saveFile(
+      final path = await exporter.saveFile(
         'transit_card_records_$stamp.txt',
         content,
       );
-      return name == null ? '已取消导出' : '已导出 ${histories.length} 张卡片：$name';
+      return path == null ? '已取消导出' : '已导出 ${histories.length} 张卡片：$path';
     } catch (e) {
       log('卡片导出失败：$e');
       return '导出失败：$e';

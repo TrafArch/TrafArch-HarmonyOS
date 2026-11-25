@@ -1,4 +1,3 @@
-import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../domain/qr_barcode_payload.dart';
@@ -30,10 +29,7 @@ class QrAcquisitionFailed extends QrAcquisitionResult {
 /// Acquisition policy and decoder lifetime, independent of navigation/dialogs.
 /// Bytes are passed through; encoding fallback remains in the existing decoders.
 class QrAcquisition {
-  const QrAcquisition({this.useDartGallery = false});
-
-  final bool useDartGallery;
-
+  const QrAcquisition();
   Future<QrAcquisitionResult> scan({
     required Future<List<int>?> Function() openCamera,
   }) async {
@@ -44,16 +40,6 @@ class QrAcquisition {
     try {
       final path = await pickQrImageFromGallery();
       if (path == null) return const QrAcquisitionCancelled();
-      if (useDartGallery) {
-        try {
-          final bytes = await decodeQrFromImageFile(path);
-          return bytes == null || bytes.isEmpty
-              ? const QrAcquisitionFailed('未在该图片中识别到二维码')
-              : AcquiredQrPayload(bytes, QrPayloadOrigin.galleryDart);
-        } finally {
-          await releaseQrImage(path).catchError((Object _) {});
-        }
-      }
       var mlkitUnavailable = false;
       MobileScannerController? controller;
       try {
@@ -84,10 +70,8 @@ class QrAcquisition {
       return QrAcquisitionFailed(
         mlkitUnavailable ? '图片识别组件不可用，内置解码也未识别到二维码' : '未在该图片中识别到二维码',
       );
-    } on PlatformException catch (error) {
-      return QrAcquisitionFailed(error.message ?? '从相册导入失败，请重试');
-    } catch (_) {
-      return const QrAcquisitionFailed('从相册导入失败，请重试');
+    } catch (error) {
+      return QrAcquisitionFailed('从相册导入失败：$error');
     }
   }
 

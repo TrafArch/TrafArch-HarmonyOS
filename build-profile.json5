@@ -7,24 +7,11 @@
         "material": {
           "certpath": "D:/iteam/TrafArch-Harmony/build/harmony/TrafArch-appgallery-release.cer",
           "keyAlias": "kajolno",
-          "keyPassword": "0000002063D752E16FA01FF284CFB17DF34DDA53BEEEBA743551CA961BF048B020769E5272BB675BF4B5AF6EC25D7AEB",
+          "keyPassword": "00000020A1544883B86F77CEC888FA1FA6D2BD4AAC74113E707F615DC65B28842486DDFC979150BAB9641080BE4849E9",
           "profile": "D:/iteam/TrafArch-Harmony/TrafArch_发布Release.p7b",
           "signAlg": "SHA256withECDSA",
           "storeFile": "D:/iteam/TrafArch-Harmony/TrafArch.p12",
-          "storePassword": "000000205A37D8742F78A2460AE758B5BEA43070CB209B2378D04A4DAA67C353ADB5692A0F75A36E9D12040B12DF9E8A"
-        }
-      },
-      {
-        "name": "trafarch",
-        "type": "HarmonyOS",
-        "material": {
-          "certpath": "D:/iteam/TrafArch-Harmony/build/harmony/TrafArch-appgallery-release.cer",
-          "keyAlias": "kajolno",
-          "keyPassword": "000000209673292F4ED20A63D145BB779A1DE0ECD90DC1BE3C5FABEA909CF99E64B7E1F1A717A9715094EBB83554E268",
-          "profile": "D:/iteam/TrafArch-Harmony/TrafArch_发布Release.p7b",
-          "signAlg": "SHA256withECDSA",
-          "storeFile": "D:/iteam/TrafArch-Harmony/TrafArch.p12",
-          "storePassword": "00000020C5B4358667268FF19FC0AC4F5AA314CBE34925211C8156491C2F7FE650C1570FABA1E4D991D940A90B350DE8"
+          "storePassword": "00000020333C4C4695E56095BB19C3850DEFBFE3E147FD69D881CCB874A6F9E3F14ABCD52438AA1CD16F74C83CF4BEE7"
         }
       }
     ],

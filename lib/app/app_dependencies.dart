@@ -40,6 +40,7 @@ import '../features/scan/application/card_read_coordinator.dart';
 import '../features/scan/domain/card_read_outcome.dart';
 import '../features/scan/domain/scan_presentation.dart';
 import '../features/reference_data/application/reference_data_controller.dart';
+import '../features/reference_data/application/card_provider_resolver.dart';
 import '../features/settings/application/settings_controller.dart';
 import '../features/settings/application/diagnostics_controller.dart';
 import '../features/qr/application/qr_controller.dart';
@@ -64,6 +65,7 @@ import '../protocols/octopus/octopus_balance.dart';
 class AppDependencies extends OwnedNotifier {
   AppDependencies({
     NfcChannel? channel,
+    Stream<NfcAdapterState>? nfcAdapterStates,
     FelicaChannel? felicaChannel,
     AssetBundle? bundle,
     SettingsStore? settingsStore,
@@ -124,6 +126,8 @@ class AppDependencies extends OwnedNotifier {
       octopus.clearResult();
       _discardRecoveryFile();
       _view = null;
+      _completedScanRequest = null;
+      _galleryCaptureId = null;
       recoveredCapture = null;
       _completedCapture = null;
       recoveryNotice = null;
@@ -145,6 +149,8 @@ class AppDependencies extends OwnedNotifier {
     }
     _memory = memoryPlatform ?? MemoryPlatform.create();
     _memory.listen(handleMemoryPressure);
+    _nfcAdapterSubscription = (nfcAdapterStates ?? watchNfcAdapterState())
+        .listen(_onNfcAdapterState);
   }
   late final UpdateService updates;
   late final SettingsController settings;
@@ -163,10 +169,17 @@ class AppDependencies extends OwnedNotifier {
   Future<void>? _initializing;
   int _scanRequest = 0;
   int? _unifiedScanRequest;
+  int? _completedScanRequest;
+  bool _gallerySave = false;
+  bool _qrAcquiring = false;
+  int _qrAcquisitionRevision = 0;
+  String? _galleryCaptureId;
   ScanPresentation? _octopusView;
   OctopusBalanceResult? _octopusResult;
   bool _octopusAttempted = false;
   Future<void>? _ordinaryStop;
+  late final StreamSubscription<NfcAdapterState> _nfcAdapterSubscription;
+  NfcAdapterState? _nfcAdapterState;
   late final MemoryPlatform _memory;
   PendingCardSave? _completedCapture;
   RecoveryCapture? recoveredCapture;
@@ -177,6 +190,7 @@ class AppDependencies extends OwnedNotifier {
   int recoveryTab = 0;
   String? recoveryRoute;
   String? pendingRecoveryRoute;
+  bool pendingRecoveryNavigation = false;
   final Map<String, List<String>> recoveryFilters = {};
   bool savingRecoveredCapture = false;
 
@@ -188,6 +202,7 @@ class AppDependencies extends OwnedNotifier {
     final capture = recoveredCapture;
     if (savingRecoveredCapture ||
         capture?.canSave != true ||
+        capture?.interrupted == true ||
         capture?.pending == null ||
         _preparingRecovery) {
       return;
@@ -245,8 +260,11 @@ class AppDependencies extends OwnedNotifier {
       recoveryTab = state.tab;
       recoveryRoute = state.route;
       pendingRecoveryRoute = state.route;
+      pendingRecoveryNavigation = true;
       recoveryFilters.addAll(state.filters);
-      if (state.qrBytes != null) qr.parseQrBytes(state.qrBytes!);
+      if (state.qrBytes case final bytes?) {
+        qr.parseQrBytes(bytes, recordDiagnostics: false);
+      }
       scan.autoScanConsumed = true;
       recoveryNotice = state.capture?.interrupted == true
           ? '上次读取已中断，请重新贴卡读取。已获取的原始证据已保留。'
@@ -284,8 +302,10 @@ class AppDependencies extends OwnedNotifier {
     // Never overwrite an unconsumed recovery file during cold-start loading.
     if (!recoveryReady) return false;
     _preparingRecovery = true;
+    _qrAcquisitionRevision++;
     try {
-      final interrupted = scan.scanning;
+      final interrupted =
+          scan.scanning || (_gallerySave && !hasCompletedRead && scanning);
       final capture =
           recoveredCapture ??
           (scan.tag != null || scan.outcome != null || interrupted
@@ -295,10 +315,16 @@ class AppDependencies extends OwnedNotifier {
                       scan.tag?.timestamp ??
                       DateTime.now(),
                   summary: {
-                    if (_view?.balanceInterpretation case final balance?)
+                    if (octopusBalanceText case final octopusBalance?)
+                      'balanceText': octopusBalance
+                    else if (_view?.balanceInterpretation case final balance?)
                       'balanceText': balance.accountBalanceText,
                     if (scan.outcome case final result?) ...{
-                      ...captureCardInfo(result),
+                      ...captureCardInfo(
+                        result,
+                        includeApplications:
+                            _completedCapture?.sessionDataJson == null,
+                      ),
                       'decoded': captureReadResult(result),
                     },
                     if (suicaTrips.isNotEmpty)
@@ -359,8 +385,10 @@ class AppDependencies extends OwnedNotifier {
     final view = ScanPresentation(
       result,
       references.knowledge ?? KnowledgeBase.empty(),
+      tag: scan.tag,
     );
     _view = view;
+    if (_gallerySave) _galleryCaptureId = id;
     for (final trip in view.suicaTrips) {
       scan.addStructuredDiagnostic(id, 'parser_record', {
         'parserId': 'felica.suica',
@@ -374,6 +402,7 @@ class AppDependencies extends OwnedNotifier {
       readAt,
       scan.frames,
       metadataIssues: scan.tag?.metadataIssues ?? const [],
+      prepareSave: !_gallerySave,
     );
     _completedCapture = archive.pending;
     final capturedCard = view.parsedCard;
@@ -410,13 +439,11 @@ class AppDependencies extends OwnedNotifier {
     final parsed = view.parsedCard;
     if (parsed != null) {
       final balance = view.balanceInterpretation;
-      final observedBalance =
-          parsed.localCard?.info.observedBalance ?? parsed.info.balanceFen;
       final display = balance?.isOctopusTunion == true
           ? balance!.accountBalanceText
-          : observedBalance == null
+          : parsed.info.balanceFen == null
           ? 'n/a'
-          : '${view.cardCurrency.symbol}${(observedBalance / 100).toStringAsFixed(2)}';
+          : '${view.cardCurrency.symbol}${(parsed.info.balanceFen! / 100).toStringAsFixed(2)}';
       scan.addDiagnostic(
         '== 余额核对：parser=${parsed.parserId}; aid=${parsed.selectedAidHex}; '
         'parsedFen=${parsed.info.balanceFen}; '
@@ -429,30 +456,80 @@ class AppDependencies extends OwnedNotifier {
       );
     }
     notifyListeners();
-    if (settings.autoSaveEnabled && isCurrent()) {
+    if (!_gallerySave && settings.autoSaveEnabled && isCurrent()) {
       await archive.autoSave(policy: settings.archiveConflictPolicy);
     }
   }
 
   CardRepository get cardRepository => archive.repository;
   PendingCardSave? get pendingCardSave => archive.pending;
-  PendingCardSave? get lastCapture => _completedCapture;
+  PendingCardSave? get completedCardCapture => _completedCapture;
   String? get lastCardFingerprint => archive.fingerprint;
   IdentifiedCard? get lastIdentified => archive.identified;
   NfcScanResult? get lastResult => scan.tag;
+  bool get hasCompletedRead => _completedScanRequest != null;
+  String? get nfcUnavailableMessage => switch (_nfcAdapterState) {
+    NfcAdapterState.disabled => '请先打开系统 NFC',
+    NfcAdapterState.unavailable => '当前设备没有 NFC',
+    _ => null,
+  };
+
+  void _onNfcAdapterState(NfcAdapterState state) {
+    if (disposed || _nfcAdapterState == state) return;
+    _nfcAdapterState = state;
+    if (state == NfcAdapterState.enabled) {
+      scan.adapterEnabled();
+      octopus.adapterEnabled();
+    } else if (scan.scanning ||
+        octopus.busy ||
+        (_unifiedScanRequest != null &&
+            _unifiedScanRequest != _completedScanRequest)) {
+      // Invalidate the attempt now; a quick retry still joins its physical close.
+      // After the read commits, an outstanding archive write needs no NFC.
+      unawaited(stop());
+    }
+    notifyListeners();
+  }
+
+  bool get nfcReleaseFailed =>
+      scan.releaseError != null || octopus.releaseError != null;
   bool get scanning =>
       _unifiedScanRequest != null || scan.scanning || octopus.busy;
   bool get isOctopusCard =>
       (parsedCard != null &&
           BalanceInterpretation.fromParsedCard(parsedCard!).isOctopusTunion) ||
-      felicaResult?.systemCodes.contains(0x8008) == true;
-  OctopusBalanceResult? get currentOctopusResult =>
-      isOctopusCard &&
-          _view != null &&
-          identical(_octopusView, _view) &&
-          identical(_octopusResult, octopus.result)
-      ? _octopusResult
-      : null;
+      switch (felicaResult) {
+        final f? when f.systemResults.isNotEmpty =>
+          f.cardProductType.isOctopusFamily &&
+              f.systemResults[0x8008]?.cardProductType.isOctopusFamily == true,
+        final f? => f.systemCodes.contains(0x8008),
+        null => false,
+      };
+  OctopusBalanceResult? get currentOctopusResult {
+    if (!isOctopusCard) return null;
+    if (_view != null &&
+        identical(_octopusView, _view) &&
+        identical(_octopusResult, octopus.result) &&
+        _octopusResult != null) {
+      return _octopusResult;
+    }
+    final system = felicaResult?.systemResults[0x8008];
+    if (system == null) return null;
+    final idm = system.idm?.replaceAll(' ', '').toUpperCase();
+    final wallet = system.wallets
+        .where(
+          (w) => w.kind == FelicaWalletKind.octopusHkd && w.balanceVerified,
+        )
+        .firstOrNull;
+    return wallet == null || !_validIdm(idm)
+        ? null
+        : OctopusBalanceResult(
+            idmHex: idm!,
+            balanceMinor: wallet.balanceMinorUnits!,
+            readAt: system.scannedAt,
+          );
+  }
+
   String? get octopusBalanceText {
     if (!isOctopusCard) return null;
     final hkd = currentOctopusResult?.balanceMinor;
@@ -486,6 +563,7 @@ class AppDependencies extends OwnedNotifier {
   bool get autoScanConsumed => scan.autoScanConsumed;
   String? get error => scan.error ?? scan.releaseError;
   ParsedCard? get parsedCard => _view?.parsedCard;
+  CardProviderInfo? get cardProviders => _view?.cardProviders;
   List<ApplicationEvidence> get applications => _view?.applications ?? const [];
   ShanghaiTransitUnionResult? get shanghaiTransitUnion =>
       _view?.shanghaiTransitUnion;
@@ -517,6 +595,7 @@ class AppDependencies extends OwnedNotifier {
     includeShanghaiOverdraft: includeShanghaiOverdraft,
     parserId: parsedCard?.parserId,
     applicationId: parsedCard?.selectedAidHex,
+    cardType: lastIdentified?.identity.cardType,
     currencyCode: cardCurrency.code,
   );
   String? get cardCityCode => _view?.cardCityCode;
@@ -538,6 +617,7 @@ class AppDependencies extends OwnedNotifier {
   ArchiveConflictPolicy get archiveConflictPolicy =>
       settings.archiveConflictPolicy;
   bool get monetEnabled => settings.monetEnabled;
+  bool get hapticEnabled => settings.hapticEnabled;
   bool get openingFeedbackSurvey => settings.openingFeedbackSurvey;
   String? get feedbackBrowserError => settings.feedbackBrowserError;
   String? get feedbackBrowserNotice => settings.feedbackBrowserNotice;
@@ -548,6 +628,26 @@ class AppDependencies extends OwnedNotifier {
   List<int>? get qrRaw => qr.qrRaw;
   String? get qrError => qr.qrError;
   bool get hasQrData => qr.hasQrData;
+  bool get qrAcquiring => _qrAcquiring;
+
+  Future<bool> runQrAcquisition(
+    Future<void> Function(bool Function()) acquire,
+  ) async {
+    if (disposed || _qrAcquiring || _preparingRecovery) return false;
+    _qrAcquiring = true;
+    final revision = ++_qrAcquisitionRevision;
+    bool isCurrent() => !disposed && revision == _qrAcquisitionRevision;
+    notifyListeners();
+    try {
+      await stop();
+      if (!isCurrent() || nfcReleaseFailed) return false;
+      await acquire(isCurrent);
+      return true;
+    } finally {
+      _qrAcquiring = false;
+      notifyListeners();
+    }
+  }
 
   String? cityNameOf(String? code) => references.cityNameOf(code);
   String? cuCityNameOf(String? code) => references.cuCityNameOf(code);
@@ -613,6 +713,8 @@ class AppDependencies extends OwnedNotifier {
       settings.setArchiveConflictPolicy(policy);
   Future<void> setMonetEnabled(bool enabled) =>
       settings.setMonetEnabled(enabled);
+  Future<void> setHapticEnabled(bool enabled) =>
+      settings.setHapticEnabled(enabled);
   Future<void> setIncludeShanghaiOverdraft(bool enabled) =>
       settings.setIncludeShanghaiOverdraft(enabled);
   Future<bool> openFeedbackEmail(String address) =>
@@ -624,7 +726,12 @@ class AppDependencies extends OwnedNotifier {
   Future<void> exportLog({Set<String>? sessionIds}) =>
       diagnostics.exportLog(sessionIds: sessionIds);
   Future<String> exportCards() => archive.exportCards();
-  Future<void> scanOnce() async {
+  Future<void> scanOnce() => _scanOnce();
+
+  Future<void> scanOnceForGallery() => _scanOnce(gallerySave: true);
+
+  Future<void> _scanOnce({bool gallerySave = false}) async {
+    if (_qrAcquiring || nfcUnavailableMessage != null) return;
     final request = ++_scanRequest;
     if (disposed || _preparingRecovery || savingRecoveredCapture) {
       return;
@@ -634,25 +741,39 @@ class AppDependencies extends OwnedNotifier {
     notifyListeners();
     try {
       if (octopus.busy || octopus.releaseError != null) await octopus.cancel();
-      if (supersedesRead) await _stopOrdinaryScan();
+      if (supersedesRead || scan.releaseError != null) {
+        await _stopOrdinaryScan();
+      }
       if (_ordinaryStop case final closing?) await closing;
-      if (disposed || request != _scanRequest || octopus.releaseError != null) {
+      if (disposed || request != _scanRequest || nfcReleaseFailed) {
         return;
       }
       // Keep the initialized ordinary reader's synchronous discovery start.
       if (!settings.initialized) await settings.initialize();
       if (disposed || request != _scanRequest) return;
+      _gallerySave = gallerySave;
       // scanOnce completes only after its physical NFC close barrier.
       await scan.scanOnce();
       if (disposed || request != _scanRequest || scan.releaseError != null) {
         return;
       }
       final view = _view;
-      if (view == null || !isOctopusCard) return;
-      if (disposed || request != _scanRequest || !identical(_view, view)) {
-        return;
+      if (view == null) return;
+      if (isOctopusCard &&
+          view.felicaResult?.systemResults.isNotEmpty != true &&
+          scan.phase == ScanPhase.complete) {
+        await _queryCurrentOctopus(request, view);
       }
-      await _queryCurrentOctopus(request, view);
+      if (!disposed &&
+          request == _scanRequest &&
+          !nfcReleaseFailed &&
+          scan.phase == ScanPhase.complete &&
+          identical(_view, view)) {
+        _completedScanRequest = request;
+        if (_galleryCaptureId case final id? when gallerySave) {
+          await _stageGalleryCapture(view, id, request);
+        }
+      }
     } finally {
       if (_unifiedScanRequest == request) {
         _unifiedScanRequest = null;
@@ -661,8 +782,43 @@ class AppDependencies extends OwnedNotifier {
     }
   }
 
+  Future<void> _stageGalleryCapture(
+    ScanPresentation view,
+    String id,
+    int request,
+  ) async {
+    final readAt = scan.tag!.timestamp;
+    archive.stage(
+      view,
+      id,
+      readAt,
+      scan.frames,
+      metadataIssues: scan.tag!.metadataIssues,
+    );
+    _completedCapture = archive.pending;
+    final pending = archive.pending;
+    if (currentOctopusResult case final result? when pending != null) {
+      await archive.attachVerifiedAccountBalance(
+        fingerprint: pending.fingerprint,
+        readAt: readAt,
+        balanceMinor: result.balanceMinor,
+        evidenceSource:
+            'octopus.nfc-f:${result.idmHex}:${result.readAt.toUtc().toIso8601String()}',
+        persistSaved: false,
+      );
+      if (!disposed && id == _galleryCaptureId) {
+        _completedCapture = archive.pending;
+      }
+    }
+    if (!disposed && request == _scanRequest && settings.autoSaveEnabled) {
+      await archive.autoSave(policy: settings.archiveConflictPolicy);
+    }
+  }
+
   Future<void> readOctopus() async {
-    if (disposed ||
+    if (_qrAcquiring ||
+        nfcUnavailableMessage != null ||
+        disposed ||
         _preparingRecovery ||
         savingRecoveredCapture ||
         scanning ||
@@ -685,7 +841,12 @@ class AppDependencies extends OwnedNotifier {
   }
 
   Future<void> _queryCurrentOctopus(int request, ScanPresentation view) async {
-    if (disposed || request != _scanRequest || !identical(_view, view)) return;
+    if (disposed ||
+        request != _scanRequest ||
+        nfcUnavailableMessage != null ||
+        !identical(_view, view)) {
+      return;
+    }
     _octopusView = view;
     _octopusAttempted = true;
     _octopusResult = null;
@@ -694,9 +855,15 @@ class AppDependencies extends OwnedNotifier {
     // when that read actually found the Octopus system. A missing IDm still
     // relies on the documented continuous-tap context.
     final felica = view.felicaResult;
-    final felicaIdm = felica != null && felica.systemCodes.contains(0x8008)
-        ? felica.idm?.replaceAll(' ', '').toUpperCase()
+    final observed = felica?.systemResults.isNotEmpty == true
+        ? felica!.systemResults[0x8008]
+        : felica;
+    final felicaIdm = observed != null && observed.systemCodes.contains(0x8008)
+        ? observed.idm?.replaceAll(' ', '').toUpperCase()
         : null;
+    if (felica?.systemResults.isNotEmpty == true && !_validIdm(felicaIdm)) {
+      return;
+    }
     final expectedIdm = _validIdm(felicaIdm) ? felicaIdm : null;
     final cancellationRevision = octopus.cancellationRevision;
     await octopus.read(expectedCardIdm: expectedIdm);
@@ -709,7 +876,7 @@ class AppDependencies extends OwnedNotifier {
     if (octopus.lastAttemptSucceeded) {
       final result = _octopusResult = octopus.result;
       final capture = _completedCapture;
-      if (result != null && capture != null) {
+      if (!_gallerySave && result != null && capture != null) {
         await archive.attachVerifiedAccountBalance(
           fingerprint: capture.fingerprint,
           readAt: capture.readAt ?? DateTime.now(),
@@ -773,6 +940,7 @@ class AppDependencies extends OwnedNotifier {
 
   @override
   void dispose() {
+    unawaited(_nfcAdapterSubscription.cancel());
     _memory.dispose();
     for (final child in _children) {
       child.removeListener(notifyListeners);

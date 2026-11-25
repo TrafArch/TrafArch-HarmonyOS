@@ -12,8 +12,7 @@ extension _GalleryLiveKnowledge on _GalleryViewState {
       future: _liveKnowledgeBrowse ??= widget.loadKnowledge(),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
-          return _list([
-            _header('知识库', back: true),
+          return _knowledgeHomeList([
             _empty(
               '本地参考数据暂不可用',
               '无法读取当前已校验的 TU／CU 发布包。',
@@ -28,8 +27,7 @@ extension _GalleryLiveKnowledge on _GalleryViewState {
         }
         final index = snapshot.data;
         if (index == null) {
-          return _list([
-            _header('知识库', back: true),
+          return _knowledgeHomeList([
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 48),
               child: Center(child: CircularProgressIndicator()),
@@ -52,6 +50,9 @@ extension _GalleryLiveKnowledge on _GalleryViewState {
     final cities = index.cities
         .where((city) => city.system.toUpperCase() == system)
         .toList(growable: false);
+    // regions 与样例数据同构：首页概况的三项统计（城市数量、线路数量、
+    // 站点数量）由页面按这些真实结构推导，站点按同城同名去重；结构缺失的
+    // 维度返回 null 并显示「未知」。version/sha256 来自已校验发布包。
     final regions = [
       for (final city in cities)
         {
@@ -93,9 +94,6 @@ extension _GalleryLiveKnowledge on _GalleryViewState {
       'cities': active?.cities.length,
       'cards': active?.cityUnionCards.entryCount,
       'terminals': active?.cuTerminals.length,
-      'routes': active?.cuRepository?.routeCount,
-      'bus': active?.cuRepository?.busRouteCount,
-      'prefixes': active?.cuRepository?.prefixCount,
     };
   }
 }

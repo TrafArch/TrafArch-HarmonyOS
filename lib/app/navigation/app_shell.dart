@@ -58,6 +58,7 @@ class _AppShellState extends State<AppShell> with RouteAware {
       setState(() => index = app.recoveryTab);
       final name = app.pendingRecoveryRoute;
       app.pendingRecoveryRoute = null;
+      app.pendingRecoveryNavigation = false;
       if (name != null && name.startsWith('/card/')) {
         Navigator.of(context).push(
           adaptiveCardDetailRoute(app, Uri.decodeComponent(name.substring(6))),
@@ -178,7 +179,12 @@ class _AppShellState extends State<AppShell> with RouteAware {
                 ],
               ),
               // 3.0.0 起 child（悬浮栏本体）与 body 同为必填参数
-              child: FloatingNavBar(index: index, onSelect: _select),
+              child: FloatingNavBar(
+                index: index,
+                onSelect: _select,
+                // 与设置页共用同一个持久化偏好：关闭震动后底栏切换不再振动。
+                hapticEnabled: () => app.hapticEnabled,
+              ),
             ),
           ),
         ),

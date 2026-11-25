@@ -38,7 +38,7 @@ void main() {
     '03104870400000000001',
   ]) {
     test(
-      'dedicated TU identity $serial does not enter the early Qingdao probe',
+      'TU identity $serial also reads the independent CU wallet before process files',
       () async {
         final chip = _Chip(processTail: true, interruptAt: '00B218F400');
         final result = (await LocalCardReader((apdu) async {
@@ -56,8 +56,20 @@ void main() {
           result.readResult.transportFailure?.kind,
           TransportFailureKind.tagLost,
         );
-        expect(chip.commands, isNot(contains(_cuWithLe)));
-        expect(chip.commands, isNot(contains(_cuWithoutLe)));
+        expect(
+          chip.commands,
+          containsAllInOrder([
+            _cuWithLe,
+            _cuWithoutLe,
+            _cuFirstRecord,
+            _tuSelect,
+          ]),
+        );
+        expect(
+          result.parsedCard.cityUnionFiles
+              .whereType<CityUnionWalletTransaction>(),
+          isNotEmpty,
+        );
         expect(chip.commands.last, '00B218F400');
       },
     );
@@ -234,7 +246,6 @@ void main() {
         chip.commands,
         containsAllInOrder([
           _cuWithLe,
-          _mfWithoutLe,
           _cuWithoutLe,
           _cuPublic,
           _cuFirstRecord,
@@ -278,6 +289,22 @@ void main() {
       expect(shown.info.line, isNull);
     },
   );
+
+  test('CU FCI and independent public identity retain an identical TU and CU transaction in both records', () async {
+    final chip = _Chip(cuFci: '6F0B8409A00000000386980701');
+    final result = (await LocalCardReader(chip.call).read())!;
+    final cu = result.parsedCard.cityUnionFiles
+        .whereType<CityUnionWalletTransaction>();
+    expect(result.parsedCard.transactions.single.rawHex, _tuBus);
+    expect(
+      cu.singleWhere((row) => row.recordNumber == 2).rawHex.replaceAll(' ', ''),
+      _tuBus,
+    );
+    expect(
+      result.applications.singleWhere((app) => app.appId == 'cu').recordCount,
+      5,
+    );
+  });
 
   test(
     'Qingdao latest metro clocks pair only the matching wallet rows',
@@ -343,17 +370,29 @@ void main() {
     },
   );
 
-  test('unrelated TU card keeps fast CU selection only', () async {
-    final chip = _Chip(city: '4560');
-    final card = (await LocalCardReader(chip.call).read())!.parsedCard;
-    expect(card.transactions, hasLength(1));
-    expect(card.cityUnionFiles, isEmpty);
-    expect(chip.commands, isNot(contains(_cuWithoutLe)));
-    expect(
-      chip.commands,
-      containsAllInOrder(['00B201D400', '00B201F500', _cuWithLe]),
-    );
-  });
+  test(
+    'changing the TU management city preserves CU compatibility and read order',
+    () async {
+      final chip = _Chip(city: '4560');
+      final card = (await LocalCardReader(chip.call).read())!.parsedCard;
+      expect(card.transactions, hasLength(1));
+      expect(
+        card.cityUnionFiles.whereType<CityUnionWalletTransaction>(),
+        hasLength(4),
+      );
+      expect(chip.commands, contains(_cuWithoutLe));
+      expect(
+        chip.commands,
+        containsAllInOrder([
+          _cuWithLe,
+          _cuWithoutLe,
+          _tuSelect,
+          '00B201D400',
+          '00B201F500',
+        ]),
+      );
+    },
+  );
 
   test(
     'Qingdao fallback declines a SELECT reporting a different AID',
@@ -440,12 +479,17 @@ ArchiveBatchEvidence _batch(String id, List<CuTransactionView> views) =>
       ),
     );
 
+Future<List<int>> Function(List<int>) qingdaoMetroReplay({
+  required bool withExitClock,
+}) => _Chip(metroPair: true, withExitClock: withExitClock).call;
+
 class _Chip {
   _Chip({
     this.city = '4520',
     this.validPublic = true,
     this.interruptAt,
     this.metroPair = false,
+    this.withExitClock = true,
     this.cuFci = '',
     this.processTail = false,
     this.rejectTuRestore = false,
@@ -456,6 +500,7 @@ class _Chip {
   final bool validPublic;
   final String? interruptAt;
   final bool metroPair;
+  final bool withExitClock;
   final String cuFci;
   final bool processTail;
   final bool rejectTuRestore;
@@ -490,6 +535,7 @@ class _Chip {
       _selected = 'cu';
     }
     if (apdu[1] == 0xB2 &&
+        apdu[4] == 0 &&
         (apdu[3] == 0xD4 || apdu[3] == 0xF4 || apdu[3] == 0xF5)) {
       expect(_selected, 'tu', reason: 'Process files must be read in TU');
       if (processTail && apdu[3] == 0xF4 && apdu[2] <= 24) {
@@ -531,7 +577,7 @@ class _Chip {
       '00B209C417' => '${_recharge}9000',
       '00B20AC417' => '6A83',
       '00B203CC20' => '${'00' * 9}20261114164713${'00' * 16}9000',
-      '00B207CC20' =>
+      '00B207CC20' when withExitClock =>
         '${'00' * 7}20261114165240${'00' * 8}00002710${'00' * 6}9000',
       _ => '6A82',
     };

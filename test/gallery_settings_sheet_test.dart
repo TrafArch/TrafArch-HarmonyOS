@@ -112,9 +112,10 @@ void main() {
       '数据与备份',
       '导出卡片记录',
       '导入卡片记录',
-      '外观',
+      '界面与外观',
       '外观主题',
       '莫奈取色',
+      '震动',
       '预测性返回手势',
       '底栏样式',
       '日志',
@@ -167,8 +168,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(c.overlay, isNull);
     await openSettingsRow(tester, '导入卡片记录');
+    await tester.pumpAndSettle();
+    expect(find.text('选择导入来源'), findsNothing);
+    expect(find.textContaining('读卡识途'), findsNothing);
     expect(c.overlay, GalleryOverlay.importPreview);
-    expect(find.text('文件内容预览 · 不会修改当前样例'), findsOneWidget);
+    expect(find.text('导入预览'), findsOneWidget);
     expect(find.textContaining('识别到 1 张卡片记录'), findsOneWidget);
     expect(find.textContaining('backup.json'), findsOneWidget);
     await tester.ensureVisible(find.text('关闭预览'));
@@ -263,6 +267,16 @@ void main() {
       scrollable: scrollable,
     );
     expect(find.text('DearVa'), findsOneWidget);
+    final dearVaRow = find
+        .ancestor(of: find.text('DearVa'), matching: find.byType(Row))
+        .first;
+    final dearVaAvatar = tester.widget<Image>(
+      find.descendant(of: dearVaRow, matching: find.byType(Image)),
+    );
+    expect(
+      (dearVaAvatar.image as AssetImage).assetName,
+      'assets/contributors/dearva-profile.jpg',
+    );
     expect(find.text('全栈开发者，为2.0界面设计提供大量帮助'), findsOneWidget);
     await tester.tap(find.byTooltip('关闭'));
     await tester.pumpAndSettle();

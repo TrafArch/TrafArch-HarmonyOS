@@ -191,7 +191,9 @@ final code = input.config.code;
         }
         Write-Host 'Verified native libraries for arm64-v8a and x86_64.'
         foreach ($path in @('assets/data/TrafArch_Database_TU.sqlite', 'assets/data/TrafArch_Database_CU.sqlite',
-            'assets/data/reference_manifest.json', 'assets/suica/suica_stationcode.db', 'assets/suica/manifest.json')) {
+            'assets/data/reference_manifest.json', 'assets/data/card_provider_registry.json',
+            'assets/Line_Icon/icons.json', 'third_party/railmapgen_palette/tu_colors.json',
+            'assets/suica/suica_stationcode.db', 'assets/suica/manifest.json')) {
             $entry = $package.GetEntry("resources/rawfile/flutter_assets/$path")
             if (!$entry) { throw "Missing bundled asset: $path" }
             $stream = $entry.Open()
