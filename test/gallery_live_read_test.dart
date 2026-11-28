@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:transit_card_analyzer/app/app_dependencies.dart';
 import 'package:transit_card_analyzer/app/trafarch_app.dart';
@@ -28,6 +29,8 @@ import 'package:transit_card_analyzer/platform/storage/app_logger.dart';
 import 'package:transit_card_analyzer/platform/storage/settings_store.dart';
 import 'package:transit_card_analyzer/protocols/octopus/octopus_balance.dart';
 import 'package:transit_card_analyzer/protocols/transit/card_parser.dart';
+import 'package:transit_card_analyzer/protocols/transit/multiapp/application_evidence.dart';
+import 'package:transit_card_analyzer/protocols/transit/tunion/tunion_models.dart';
 import 'package:transit_card_analyzer/shared/domain/archive_conflict_policy.dart';
 
 import 'qingdao_cu_wallet_regression_test.dart' show qingdaoMetroReplay;
@@ -272,6 +275,73 @@ void main() {
     });
   }
 
+  testWidgets('重庆一票制设施在卡包最近交易和详情中显示设施与编号', (tester) async {
+    final fixture = await _showGallery(tester, _CardKind.tu);
+    final snapshot = CardSessionSnapshot(
+      cardCityCode: '4401',
+      recordProvenance: const {
+        'cycle[0]': {
+          'capturedDisplay': {'line': '703路', 'cityName': '重庆市'},
+        },
+      },
+      processTrips: [
+        TUnionTripRecord(
+          typeCode: 6,
+          appTypeCode: 2,
+          cityCode: '6900',
+          terminalId: '0000000000000073',
+          lineStationCode: '07030000000000',
+          time: DateTime(2025, 7, 12, 10, 34),
+          amountFen: 100,
+          balanceFen: 5000,
+        ),
+      ],
+    );
+    await tester.runAsync(
+      () => fixture.app.cardRepository.saveIdentity(
+        fingerprint: 'test-facility',
+        identity: const CardArchiveIdentity(
+          cardType: 'china_tunion',
+          officialName: '重庆行程测试卡',
+        ),
+        sessionDataJson: snapshot.encode(),
+        readAt: _readAt,
+      ),
+    );
+    await _navigate(tester, 'cards');
+    await _settleIo(tester);
+    await tester.tap(find.text('重庆行程测试卡'));
+    await _settleIo(tester);
+    final ticket = find.byKey(const ValueKey('trip-one-way'));
+    expect(ticket, findsOneWidget);
+    for (final value in ['703', '凯旋路电梯', '10:34']) {
+      expect(
+        find.descendant(of: ticket, matching: find.text(value)),
+        findsOneWidget,
+      );
+    }
+    expect(find.text('电梯'), findsOneWidget);
+    expect(find.byIcon(Icons.elevator_outlined), findsOneWidget);
+    expect(
+      find.descendant(of: ticket, matching: find.text('未记录')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('trip-direction-arrow')), findsNothing);
+    await tester.ensureVisible(ticket);
+    await tester.tap(ticket);
+    await tester.pumpAndSettle();
+    final sheet = find.byKey(const ValueKey('gallery-modal-surface'));
+    expect(
+      find.descendant(of: sheet, matching: find.text('电梯')),
+      findsNWidgets(2),
+    );
+    expect(
+      find.descendant(of: sheet, matching: find.text('凯旋路电梯')),
+      findsOneWidget,
+    );
+    await _unmount(tester);
+  });
+
   testWidgets('哈尔滨卡卡片详情显示 CU 镜像核实的站点，保留未知方向', (tester) async {
     final fixture = await _showGallery(tester, _CardKind.tu);
     final view = await scanHarbinMirrorLedger();
@@ -515,35 +585,102 @@ void main() {
     await _unmount(tester);
   });
 
-  testWidgets('2.x shows application probes only in expert information', (
+  testWidgets(
+    'Shanghai card numbers appear on faces and stay out of the wallet row',
+    (tester) async {
+      final fixture = await _showGallery(
+        tester,
+        _CardKind.tu,
+        reader: _ShanghaiWalletReader(),
+      );
+      await _read(tester, '开始读取');
+      final current = _liveAdapter(tester).controller.current;
+      final numbers = current.applicationNumbers;
+      expect(numbers.keys.take(2), ['TU', 'CU']);
+      const displayedNumbers = '3104 7700 0000 0000 001\nCU 4328 6773 214';
+      expect(find.text(displayedNumbers), findsOneWidget);
+      await _navigate(tester, 'expert');
+      await tester.tap(find.text('信息获取'));
+      await tester.pumpAndSettle();
+      expect(find.text('逐应用探测'), findsOneWidget);
+      expect(find.text('查看记录原码'), findsWidgets);
+      expect(
+        tester.getTopLeft(find.text('TU 卡号')).dy,
+        lessThan(tester.getTopLeft(find.text('CU 卡号')).dy),
+      );
+      for (final number in numbers.values) {
+        expect(find.text(number), findsWidgets);
+      }
+
+      await _navigate(tester, 'cards');
+      await _settleIo(tester);
+      final saved = (await tester.runAsync(
+        fixture.app.cardRepository.getAllCards,
+      ))!.single;
+      final walletCard = find.byKey(ValueKey('wallet-card-${saved.id}'));
+      expect(
+        find.descendant(
+          of: walletCard,
+          matching: find.textContaining(RegExp(r'3104 ?7700|4328 ?6773')),
+        ),
+        findsNothing,
+      );
+      final row = tester.getRect(walletCard);
+      await tester.dragFrom(
+        Offset(row.center.dx, row.top + 24),
+        const Offset(-280, 0),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ValueKey('wallet-face-${saved.id}')));
+      await tester.pumpAndSettle();
+      expect(find.text(displayedNumbers), findsOneWidget);
+      await tester.tap(find.byTooltip('关闭').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(saved.displayName));
+      await _settleIo(tester);
+      expect(find.text(displayedNumbers), findsOneWidget);
+      await tester.tap(find.text('卡片信息'));
+      await tester.pumpAndSettle();
+      expect(find.text('TU 卡号'), findsOneWidget);
+      expect(find.text('CU 卡号'), findsOneWidget);
+      await tester.ensureVisible(find.text('协议'));
+      await tester.pumpAndSettle();
+      expect(find.text('逐应用探测'), findsNothing);
+      expect(find.text('查看记录原码'), findsNothing);
+      await _unmount(tester);
+    },
+  );
+
+  testWidgets('Lingnan Pass uses the LNP prefix next to the TU number', (
     tester,
   ) async {
-    final fixture = await _showGallery(
-      tester,
-      _CardKind.tu,
-      reader: _ShanghaiWalletReader(),
+    final fixture = await _showGallery(tester, _CardKind.tu);
+    fixture.app.recoveredCapture = RecoveryCapture(
+      readAt: _readAt,
+      summary: {
+        'cardType': 'lingnan_tunion',
+        'cardName': '岭南通（交通联合版）',
+        'applications': [
+          ApplicationEvidence.succeeded(
+            'lingnan_appy',
+            '岭南通资料（PAY.APPY）',
+            cardNumber: '1234567890',
+          ).toJson(),
+          ApplicationEvidence.succeeded(
+            'tu',
+            '交通联合',
+            cardNumber: '310487030000000001',
+          ).toJson(),
+        ],
+      },
+      frames: const [],
     );
-    await _read(tester, '开始读取');
-    await _navigate(tester, 'expert');
-    await tester.tap(find.text('信息获取'));
-    await tester.pumpAndSettle();
-    expect(find.text('逐应用探测'), findsOneWidget);
-    expect(find.text('查看记录原码'), findsWidgets);
-
-    await _navigate(tester, 'cards');
+    await fixture.app.setAutoSaveEnabled(false);
     await _settleIo(tester);
-    final saved = (await tester.runAsync(
-      fixture.app.cardRepository.getAllCards,
-    ))!.single;
-    await tester.tap(find.text(saved.displayName));
-    await _settleIo(tester);
-    await tester.tap(find.text('卡片信息'));
-    await tester.pumpAndSettle();
-    expect(find.text('完整卡号'), findsOneWidget);
-    await tester.ensureVisible(find.text('协议'));
-    await tester.pumpAndSettle();
-    expect(find.text('逐应用探测'), findsNothing);
-    expect(find.text('查看记录原码'), findsNothing);
+    expect(
+      find.text('3104 8703 0000 0000 01\nLNP 1234 5678 90'),
+      findsOneWidget,
+    );
     await _unmount(tester);
   });
 
@@ -807,15 +944,69 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('删除本卡'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, '删除'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, '删除'));
+      expect(await tester.runAsync(app.cardRepository.getAllCards), [renamed]);
+      final originalRows = await tester.runAsync(
+        () => app.cardRepository.getArchiveRows(card.id),
+      );
+      await tester.tap(find.text('确定'));
       await _settleIo(tester);
       expect(await tester.runAsync(app.cardRepository.getAllCards), isEmpty);
       expect(find.text('还没有保存的卡片'), findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing);
+      await tester.tap(find.text('撤回'));
+      await _settleIo(tester);
+      final restoredRows = await tester.runAsync(
+        () => app.cardRepository.getArchiveRows(card.id),
+      );
+      expect(restoredRows!.card, renamed);
+      expect(restoredRows.batches, originalRows!.batches);
+      expect(find.text(renamed.displayName), findsOneWidget);
       await _unmount(tester);
     },
   );
+
+  for (final (supported, expected) in <(bool?, String)>[
+    (true, '及部分 FeliCa 卡片'),
+    (false, '此设备不支持 FeliCa 识别'),
+    (null, '无法确认此设备是否支持 FeliCa 识别'),
+  ]) {
+    testWidgets(
+      'home distinguishes FeliCa capability $supported, NFC off and absent hardware',
+      (tester) async {
+        final states = StreamController<NfcAdapterState>.broadcast(sync: true);
+        addTearDown(states.close);
+        const channel = MethodChannel('transit_card_analyzer/nfc');
+        final messenger = tester.binding.defaultBinaryMessenger;
+        int capabilityRequests = 0;
+        messenger.setMockMethodCallHandler(channel, (call) async {
+          expect(call.method, 'getFelicaReaderSupport');
+          capabilityRequests++;
+          return supported;
+        });
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+        final fixture = await _showGallery(
+          tester,
+          _CardKind.tu,
+          nfcAdapterStates: states.stream,
+          felicaReaderSupport: () => getFelicaReaderSupport(isAndroid: true),
+        );
+        expect(capabilityRequests, 1);
+        expect(find.textContaining(expected), findsOneWidget);
+        states.add(NfcAdapterState.disabled);
+        await tester.pumpAndSettle();
+        expect(find.text('请先打开系统 NFC'), findsOneWidget);
+        expect(fixture.app.felicaReaderSupported, supported);
+        states.add(NfcAdapterState.unavailable);
+        await tester.pumpAndSettle();
+        expect(find.text('该手机不支持NFC识别'), findsOneWidget);
+        expect(fixture.app.felicaReaderSupported, isFalse);
+        final start = find.widgetWithText(TextButton, '开始读取');
+        expect(tester.widget<TextButton>(start).onPressed, isNull);
+        expect(fixture.native.discoveries, 0);
+        await _unmount(tester);
+      },
+    );
+  }
 
   testWidgets(
     'turning NFC off ends the waiting prompt and turning it on restores manual reading',
@@ -1078,6 +1269,11 @@ void main() {
       final fixture = await _showGallery(tester, _CardKind.tu);
       final app = fixture.app;
       await _read(tester, '开始读取');
+      final saved = (await tester.runAsync(app.cardRepository.getAllCards))!
+          .single;
+      await tester.runAsync(
+        () => app.cardRepository.renameCard(saved.id, '我的通勤卡'),
+      );
       final original = (await tester.runAsync(app.cardRepository.getAllCards))!
           .single;
       await tester.tap(find.byTooltip('设置'));
@@ -1105,9 +1301,8 @@ void main() {
       await _read(tester, '再次读取');
       await _settleIo(tester);
       await tester.tap(find.text('保存卡片'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, '确认'));
-      await tester.pumpAndSettle();
+      await _settleIo(tester);
+      expect(find.byType(TextField), findsNothing);
       expect(find.text('记录已存在'), findsOneWidget);
       expect(
         (await tester.runAsync(app.cardRepository.getAllCards))!.single,
@@ -1130,6 +1325,7 @@ void main() {
           .single;
       expect(updated.id, original.id);
       expect(updated.balanceFen, 8000);
+      expect(updated.displayName, '我的通勤卡');
       await _unmount(tester);
     },
   );
@@ -1724,6 +1920,7 @@ Future<_Fixture> _showGallery(
   bool tuWallet = true,
   SettingsStore? settingsStore,
   Stream<NfcAdapterState>? nfcAdapterStates,
+  Future<bool?> Function()? felicaReaderSupport,
 }) async {
   _size(tester);
   final fixture = _Fixture(
@@ -1734,6 +1931,7 @@ Future<_Fixture> _showGallery(
     tuWallet: tuWallet,
     settingsStore: settingsStore,
     nfcAdapterStates: nfcAdapterStates,
+    felicaReaderSupport: felicaReaderSupport,
   );
   addTearDown(fixture.app.dispose);
   await tester.runAsync(fixture.app.init);
@@ -1764,6 +1962,7 @@ class _Fixture {
     UpdateService? updateService,
     SettingsStore? settingsStore,
     Stream<NfcAdapterState>? nfcAdapterStates,
+    Future<bool?> Function()? felicaReaderSupport,
   }) : native =
            reader ??
            (shenzhen ? _ShenzhenReader(withTu: tuWallet) : _Reader(kind)) {
@@ -1772,6 +1971,7 @@ class _Fixture {
       bundle: MissingTestAssets(),
       channel: native,
       nfcAdapterStates: nfcAdapterStates,
+      felicaReaderSupport: felicaReaderSupport,
       felicaChannel: native,
       logger: AppLogger(store: MemoryLogStore()),
       updateService: updateService,

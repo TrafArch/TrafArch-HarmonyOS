@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:transit_card_analyzer/features/trips/journey_transport_icon.dart';
@@ -15,7 +16,11 @@ import 'package:transit_card_analyzer/gallery/gallery_theme.dart';
 import 'support/gallery_scroll.dart';
 
 void main() {
+  late GalleryRailLineCatalog bundledRailLineCatalog;
   late GalleryController controller;
+  setUpAll(() async {
+    bundledRailLineCatalog = await GalleryRailLineCatalog.load(rootBundle);
+  });
   setUp(() {
     controller = GalleryController(
       GalleryData(
@@ -46,7 +51,7 @@ void main() {
   testWidgets('trip reference typography bolds stations and trims the clock', (
     tester,
   ) async {
-    await mount(tester);
+    await mount(tester, railLineCatalog: GalleryRailLineCatalog.empty());
     for (final value in [
       '轨道交通',
       '1 号线',
@@ -219,17 +224,7 @@ void main() {
           'entryLineCity': {'system': 'tu', 'code': '3910', 'name': '福州'},
           'exitLineCity': {'system': 'tu', 'code': '3910', 'name': '福州'},
         });
-      await mount(
-        tester,
-        railLineCatalog: GalleryRailLineCatalog.fromJson(
-          jsonDecode(File('assets/Line_Icon/icons.json').readAsStringSync())
-              as Map<String, dynamic>,
-          jsonDecode(
-            File('third_party/railmapgen_palette/tu_colors.json')
-                .readAsStringSync(),
-          ) as Map<String, dynamic>,
-        ),
-      );
+      await mount(tester, railLineCatalog: bundledRailLineCatalog);
 
       for (final (key, asset) in [
         ('trip-entry-line-badge', 'assets/Line_Icon/3910/3910_Line_4.svg'),
@@ -262,14 +257,14 @@ void main() {
         () => controller.trips[0] = {
           ...controller.trips[0],
           'city': '上海',
-          'entryLine': '4号线',
-          'exitLine': '4号线',
+          'entryLine': '19号线',
+          'exitLine': '19号线',
           'entryLineCity': {'system': 'tu', 'code': '2900', 'name': '上海'},
           'exitLineCity': {'system': 'tu', 'code': '2900', 'name': '上海'},
         },
       );
       await tester.pumpAndSettle();
-      final colour = const Color(0xff461d84);
+      final colour = const Color(0xfff5ab78);
       expect(
         find.byWidgetPredicate(
           (widget) =>
@@ -278,8 +273,8 @@ void main() {
         ),
         findsNWidgets(2),
       );
-      for (final text in tester.widgetList<Text>(find.text('4号线'))) {
-        expect(text.style!.color, Colors.white);
+      for (final text in tester.widgetList<Text>(find.text('19号线'))) {
+        expect(text.style!.color, Colors.black);
       }
 
       controller.update(
@@ -310,8 +305,275 @@ void main() {
         ),
         findsOneWidget,
       );
+
+      tester.view.physicalSize = const Size(412, 892);
+      tester.platformDispatcher.textScaleFactorTestValue = 1;
+      controller.update(
+        () => controller.trips[0] = {
+          ...controller.trips[0],
+          'city': '北京',
+          'entryLine': '18号线',
+          'exitLine': '大兴机场线',
+          'entryLineCity': {'system': 'tu', 'code': '1000', 'name': '北京'},
+          'exitLineCity': {'system': 'tu', 'code': '1000', 'name': '北京'},
+        },
+      );
+      await tester.pumpAndSettle();
+      for (final (key, asset) in [
+        ('trip-entry-line-badge', 'assets/Line_Icon/1000/1000_Line_12.svg'),
+        ('trip-exit-line-badge', 'assets/Line_Icon/1000/1000_Line_58.svg'),
+      ]) {
+        final picture = find.descendant(
+          of: find.byKey(ValueKey(key)),
+          matching: find.byType(SvgPicture),
+        );
+        expect(picture, findsOneWidget);
+        expect(
+          (tester.widget<SvgPicture>(picture).bytesLoader as SvgAssetLoader)
+              .assetName,
+          asset,
+        );
+      }
+
+      controller.update(
+        () => controller.trips[0] = {
+          ...controller.trips[0],
+          'city': '厦门',
+          'entryLine': '1号线',
+          'exitLine': '3号线',
+          'entryLineCity': {'system': 'tu', 'code': '3930', 'name': '厦门'},
+          'exitLineCity': {'system': 'tu', 'code': '3930', 'name': '厦门'},
+        },
+      );
+      await tester.pumpAndSettle();
+      final xiamenOne = find.descendant(
+        of: find.byKey(const ValueKey('trip-entry-line-badge')),
+        matching: find.byType(SvgPicture),
+      );
+      final xiamenThree = find.descendant(
+        of: find.byKey(const ValueKey('trip-exit-line-badge')),
+        matching: find.byType(SvgPicture),
+      );
+      expect(xiamenOne, findsOneWidget);
+      expect(xiamenThree, findsOneWidget);
+      final oneSize = tester.getSize(xiamenOne);
+      final threeSize = tester.getSize(xiamenThree);
+      expect(oneSize.height, closeTo(24, .1));
+      expect(threeSize.height, closeTo(24, .1));
+      expect(oneSize.width / threeSize.width, greaterThan(.97));
     },
   );
+
+  testWidgets('Shanghai TU and CU endpoints use bundled SVGs in dark mode', (
+    tester,
+  ) async {
+    controller.themeMode = ThemeMode.dark;
+    final base = controller.trips.first;
+    controller.trips
+      ..clear()
+      ..add({
+        ...base,
+        'city': '上海',
+        'entryLine': '1 号线',
+        'exitLine': '机场联络线',
+        'entryLineCity': {'system': 'tu', 'code': '2900'},
+        'exitLineCity': {'system': 'cu', 'code': '2000'},
+      });
+    await mount(tester, railLineCatalog: bundledRailLineCatalog);
+
+    for (final (endpoint, suffix, aspectRatio) in [
+      ('entry', '01_black', 132.4 / 59.6),
+      ('exit', '51', 43.32 / 18.19),
+    ]) {
+      final picture = find.descendant(
+        of: find.byKey(ValueKey('trip-$endpoint-line-badge')),
+        matching: find.byType(SvgPicture),
+      );
+      expect(picture, findsOneWidget);
+      final svg = tester.widget<SvgPicture>(picture);
+      expect(
+        (svg.bytesLoader as SvgAssetLoader).assetName,
+        'assets/Line_Icon/2900/2900_Line_$suffix.svg',
+      );
+      expect(svg.colorFilter, isNull);
+      final size = tester.getSize(picture);
+      expect(size.height, closeTo(24, .1));
+      expect(size.width, closeTo(24 * aspectRatio, .1));
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Tianjin numbered and named line badges render in both themes', (
+    tester,
+  ) async {
+    final base = controller.trips.first;
+    controller.trips
+      ..clear()
+      ..add({
+        ...base,
+        'city': '天津',
+        'entryLine': '7号线',
+        'exitLine': '津静线',
+        'entryLineCity': {'system': 'tu', 'code': '1121'},
+        'exitLineCity': {'system': 'tu', 'code': '1121'},
+      });
+    await mount(tester, railLineCatalog: bundledRailLineCatalog);
+
+    for (final theme in [ThemeMode.light, ThemeMode.dark]) {
+      controller.update(() => controller.themeMode = theme);
+      await tester.pumpAndSettle();
+      for (final (endpoint, suffix, width) in [
+        ('entry', '07', 27.33),
+        ('exit', '21', 41.97),
+      ]) {
+        final picture = find.descendant(
+          of: find.byKey(ValueKey('trip-$endpoint-line-badge')),
+          matching: find.byType(SvgPicture),
+        );
+        expect(picture, findsOneWidget);
+        final svg = tester.widget<SvgPicture>(picture);
+        expect(
+          (svg.bytesLoader as SvgAssetLoader).assetName,
+          'assets/Line_Icon/1121/1121_Line_$suffix.svg',
+        );
+        expect(svg.colorFilter, isNull);
+        final size = tester.getSize(picture);
+        expect(size.height, closeTo(24, .1));
+        expect(size.width, closeTo(24 * width / 27.31, .1));
+      }
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets('Guangdong intercity trip badges fit in both themes', (
+    tester,
+  ) async {
+    final base = controller.trips.first;
+    controller.trips
+      ..clear()
+      ..add({
+        ...base,
+        'city': '广州',
+        'entryLine': '广州东环城际',
+        'exitLine': '新白广城际',
+        'entryLineCity': {'system': 'tu', 'code': '5810'},
+        'exitLineCity': {'system': 'tu', 'code': '5810'},
+      });
+    await mount(tester, railLineCatalog: bundledRailLineCatalog);
+
+    for (final theme in [ThemeMode.light, ThemeMode.dark]) {
+      controller.update(() => controller.themeMode = theme);
+      await tester.pumpAndSettle();
+      for (final (endpoint, suffix) in [
+        ('entry', '71_75_76'),
+        ('exit', '77_78'),
+      ]) {
+        final picture = find.descendant(
+          of: find.byKey(ValueKey('trip-$endpoint-line-badge')),
+          matching: find.byType(SvgPicture),
+        );
+        expect(picture, findsOneWidget);
+        final loader =
+            tester.widget<SvgPicture>(picture).bytesLoader as SvgAssetLoader;
+        expect(loader.assetName, 'assets/Line_Icon/5810/5810_Line_$suffix.svg');
+        expect(tester.getSize(picture).width, closeTo(60, .1));
+        expect(tester.getSize(picture).height, closeTo(60 * 64.3 / 180, .1));
+      }
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets('Shenzhen TU and CU badges match their lines in both themes', (
+    tester,
+  ) async {
+    final base = controller.trips.first;
+    controller.trips
+      ..clear()
+      ..add({
+        ...base,
+        'city': '深圳',
+        'entryLine': '1号线',
+        'exitLine': '8号线',
+        'entryLineCity': {'system': 'tu', 'code': '5840'},
+        'exitLineCity': {'system': 'cu', 'code': '5180'},
+      });
+    await mount(tester, railLineCatalog: bundledRailLineCatalog);
+
+    for (final theme in [ThemeMode.light, ThemeMode.dark]) {
+      controller.update(() => controller.themeMode = theme);
+      await tester.pumpAndSettle();
+      for (final (endpoint, suffix, ratio) in [
+        ('entry', '68', 916 / 457),
+        ('exit', '66', 918 / 461),
+      ]) {
+        final picture = find.descendant(
+          of: find.byKey(ValueKey('trip-$endpoint-line-badge')),
+          matching: find.byType(SvgPicture),
+        );
+        expect(picture, findsOneWidget);
+        final loader =
+            tester.widget<SvgPicture>(picture).bytesLoader as SvgAssetLoader;
+        expect(loader.assetName, 'assets/Line_Icon/5840/5840_Line_$suffix.svg');
+        final size = tester.getSize(picture);
+        expect(size.height, closeTo(24, .1));
+        expect(size.width, closeTo(24 * ratio, .1));
+      }
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets('rail line SVG variants follow the active app brightness', (
+    tester,
+  ) async {
+    final base = controller.trips.first;
+    controller.trips
+      ..clear()
+      ..add({
+        ...base,
+        'city': '苏州 / 上海',
+        'isCrossCity': true,
+        'entryLine': '11号线',
+        'exitLine': '11号线',
+        'entryLineCity': {'system': 'tu', 'code': '3050'},
+        'exitLineCity': {'system': 'tu', 'code': '2900'},
+      });
+    addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
+    await mount(tester, railLineCatalog: bundledRailLineCatalog);
+
+    for (final (mode, systemBrightness, suffix) in [
+      (ThemeMode.light, Brightness.dark, ''),
+      (ThemeMode.dark, Brightness.light, '_black'),
+      (ThemeMode.system, Brightness.dark, '_black'),
+      (ThemeMode.system, Brightness.light, ''),
+    ]) {
+      tester.platformDispatcher.platformBrightnessTestValue = systemBrightness;
+      if (controller.themeMode != mode) {
+        controller.update(() => controller.themeMode = mode);
+      }
+      await tester.pumpAndSettle();
+
+      for (final (endpoint, file, aspectRatio) in [
+        ('entry', '3050/3050_Line_11$suffix.svg', 263.58 / 115),
+        ('exit', '2900/2900_Line_11$suffix.svg', 140.8 / 59.6),
+      ]) {
+        final picture = find.descendant(
+          of: find.byKey(ValueKey('trip-$endpoint-line-badge')),
+          matching: find.byType(SvgPicture),
+        );
+        expect(picture, findsOneWidget);
+        final svg = tester.widget<SvgPicture>(picture);
+        expect(
+          (svg.bytesLoader as SvgAssetLoader).assetName,
+          'assets/Line_Icon/$file',
+        );
+        expect(svg.colorFilter, isNull);
+        final size = tester.getSize(picture);
+        expect(size.height, closeTo(24, .1));
+        expect(size.width, closeTo(24 * aspectRatio, .1));
+      }
+      expect(tester.takeException(), isNull);
+    }
+  });
 
   testWidgets(
     'unknown, multi-city and cross-city rail keep the themed fallback and bus stays unchanged',
@@ -359,9 +621,20 @@ void main() {
     },
   );
 
-  testWidgets('one-way bus ticket shows a single boarding row without arrow', (
+  testWidgets('one-way bus keeps money in its half-modal, not the ticket', (
     tester,
   ) async {
+    final index = controller.trips.indexWhere(
+      (record) => record['entryLine'] == '49 路',
+    );
+    expect(index, greaterThanOrEqualTo(0));
+    controller.trips = [
+      for (final (i, record) in controller.trips.indexed)
+        if (i == index)
+          {...record, 'amount': '¥2.47', 'balanceAfter': '¥61.39'}
+        else
+          record,
+    ];
     await mount(tester);
     final row = find.byKey(const ValueKey('trip-one-way'));
     expect(row, findsOneWidget);
@@ -386,6 +659,20 @@ void main() {
     expect(time.style!.fontWeight, FontWeight.w400);
     expect(find.text('公交'), findsWidgets);
     expect(find.text('上海'), findsWidgets);
+    expect(find.text('¥2.47'), findsNothing);
+    expect(find.text('¥61.39'), findsNothing);
+    await tester.ensureVisible(row);
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    final sheet = find.byKey(const ValueKey('gallery-modal-surface'));
+    expect(
+      find.descendant(of: sheet, matching: find.text('¥2.47')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: sheet, matching: find.text('¥61.39')),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -443,7 +730,9 @@ void main() {
       final station = tester.getRect(find.text('徐家汇').first);
       expect(time.bottom, lessThan(station.top));
       // 线路徽章移到时间右侧，不再与站点同组。
-      final badge = tester.getRect(find.text('1 号线').first);
+      final badge = tester.getRect(
+        find.byKey(const ValueKey('trip-entry-line-badge')).first,
+      );
       expect(badge.left, greaterThan(time.right));
       expect(badge.center.dy, closeTo(time.center.dy, 1.5));
       expect(badge.bottom, lessThanOrEqualTo(station.top));

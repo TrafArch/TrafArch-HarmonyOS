@@ -27,11 +27,12 @@ import '../features/archive/data/card_repository.dart';
 import '../features/archive/domain/card_name_extension.dart';
 import '../features/archive/domain/card_session_snapshot.dart';
 import '../features/archive/domain/card_types.dart';
+import '../features/archive/domain/suica_archive_identity.dart';
+import '../features/archive/domain/suica_manual_number.dart';
 import '../features/archive/presentation/archive_balance_display.dart';
 import '../features/archive/presentation/archive_trip_presenter.dart';
 import '../features/archive/presentation/shanghai_archive_mirrored_records.dart';
 import '../features/archive/presentation/archive_transfer_dialogs.dart';
-import '../features/cards/cards_page.dart';
 import '../features/expert/expert_page.dart';
 import '../features/expert/expert_formatters.dart';
 import '../features/home/presentation/result_labels.dart';
@@ -40,6 +41,7 @@ import '../features/qr/presentation/qr_acquire.dart';
 import '../features/recovery/recovery_state.dart';
 import '../features/reference_data/data/city_union_lookup_rules.dart';
 import '../features/reference_data/data/tunion_knowledge_base.dart';
+import '../features/reference_data/domain/tu_transit_facility.dart';
 import '../features/scan/application/scan_controller.dart';
 import '../features/settings/presentation/diagnostic_export_dialog.dart';
 import '../features/transit_analysis/balance_interpretation.dart';
@@ -99,6 +101,19 @@ part 'gallery_live_read.dart';
 part 'gallery_live_archive.dart';
 part 'gallery_live_knowledge.dart';
 
+SystemUiOverlayStyle _gallerySystemOverlayStyle(
+  GalleryTokens tokens,
+  Color navigationSurface,
+) => (tokens.dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
+    .copyWith(
+      statusBarColor: Colors.transparent,
+      systemNavigationBarColor: navigationSurface,
+      systemNavigationBarDividerColor: Colors.transparent,
+      systemNavigationBarIconBrightness: tokens.dark
+          ? Brightness.light
+          : Brightness.dark,
+    );
+
 class GalleryApp extends StatefulWidget {
   const GalleryApp({
     super.key,
@@ -136,6 +151,8 @@ class _GalleryAppState extends State<GalleryApp> {
   Color? _systemMonetSeed;
   int _systemColorRequest = 0;
   final _appearance = _GalleryAppearance();
+  final _rootBackStack = _GalleryBackStack();
+  late final _rootObservers = <NavigatorObserver>[_rootBackStack];
   Future<GalleryKnowledgeIndex>? _knowledgeIndex;
   KnowledgeBase? _indexedKnowledge;
 
@@ -291,6 +308,7 @@ class _GalleryAppState extends State<GalleryApp> {
                     key: ValueKey(c.generation),
                     controller: c,
                     preferences: _preferences,
+                    rootBackStack: _rootBackStack,
                     loadKnowledge: _loadKnowledge,
                     onDisableBeta: widget.onDisableBeta,
                     openWebLink: widget.openWebLink,
@@ -300,6 +318,7 @@ class _GalleryAppState extends State<GalleryApp> {
                 final updates = widget.liveApp?.updates;
                 final claimStartupUpdate = widget.claimStartupUpdatePrompt;
                 return MaterialApp(
+                  navigatorObservers: _rootObservers,
                   title: 'TrafArch',
                   debugShowCheckedModeBanner: false,
                   locale: const Locale('zh', 'CN'),
@@ -320,19 +339,12 @@ class _GalleryAppState extends State<GalleryApp> {
                     final tokens = Theme.of(context)
                         .extension<GalleryTokens>()!;
                     return AnnotatedRegion<SystemUiOverlayStyle>(
-                      value:
-                          (tokens.dark
-                                  ? SystemUiOverlayStyle.light
-                                  : SystemUiOverlayStyle.dark)
-                              .copyWith(
-                                statusBarColor: Colors.transparent,
-                                systemNavigationBarColor:
-                                    c.docked && c.isMainPage
-                                    ? tokens.dockedNavigationSurface
-                                    : tokens.canvas,
-                                systemNavigationBarDividerColor:
-                                    Colors.transparent,
-                              ),
+                      value: _gallerySystemOverlayStyle(
+                        tokens,
+                        c.docked && c.isMainPage
+                            ? tokens.dockedNavigationSurface
+                            : tokens.canvas,
+                      ),
                       child: ColoredBox(
                         color: tokens.canvas,
                         child: GalleryWindow(
@@ -444,6 +456,8 @@ class _GalleryViewState extends State<_GalleryView> {
   String? _openingLink;
   String? _linkError;
   bool _pickingFaceImage = false;
+  bool _checkingLiveSave = false;
+  bool _confirmingCardDeletion = false;
   String? _faceImageError;
   Widget? _cachedLayout;
   Set<String>? _walletCardIds;
@@ -471,10 +485,23 @@ class _GalleryViewState extends State<_GalleryView> {
     if (_pickingFaceImage) return;
     final card = _selectedCard;
     final generation = c.generation;
+    final replacement = c.faceCrop;
+    final replacingInEditor = replacement?.editing == true;
+    var leftEditor = false;
+    void observeEditor() {
+      // The editor and chooser share a route. Exiting and reentering the
+      // editor must not let a previous picker result replace this draft.
+      if (!identical(c.faceCrop, replacement) || replacement?.editing != true) {
+        leftEditor = true;
+      }
+    }
+
     bool active() =>
         mounted &&
+        !leftEditor &&
         c.generation == generation &&
         c.navigationStack.last.id == _entry.id;
+    if (replacingInEditor) c.addListener(observeEditor);
     setState(() {
       _pickingFaceImage = true;
       _faceImageError = null;
@@ -523,6 +550,7 @@ class _GalleryViewState extends State<_GalleryView> {
     } catch (_) {
       if (active()) setState(() => _faceImageError = '无法读取所选图片，请选择其他图片重试');
     } finally {
+      if (replacingInEditor) c.removeListener(observeEditor);
       if (mounted) setState(() => _pickingFaceImage = false);
     }
   }
@@ -673,12 +701,7 @@ class _GalleryViewState extends State<_GalleryView> {
     if (_entry.overlay != null) {
       final sheet = _entry.overlay!.isBottomSheet;
       return AnnotatedRegion<SystemUiOverlayStyle>(
-        value: (t.dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
-            .copyWith(
-              statusBarColor: Colors.transparent,
-              systemNavigationBarColor: sheet ? t.raised : t.canvas,
-              systemNavigationBarDividerColor: Colors.transparent,
-            ),
+        value: _gallerySystemOverlayStyle(t, sheet ? t.raised : t.canvas),
         child: Padding(
           padding: EdgeInsets.only(
             bottom: MediaQuery.viewInsetsOf(context).bottom,
@@ -695,14 +718,10 @@ class _GalleryViewState extends State<_GalleryView> {
       );
     }
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: (t.dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark)
-          .copyWith(
-            statusBarColor: Colors.transparent,
-            systemNavigationBarColor: c.docked && _isMain
-                ? t.dockedNavigationSurface
-                : t.canvas,
-            systemNavigationBarDividerColor: Colors.transparent,
-          ),
+      value: _gallerySystemOverlayStyle(
+        t,
+        c.docked && _isMain ? t.dockedNavigationSurface : t.canvas,
+      ),
       child: Shortcuts(
         shortcuts: const {
           SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),

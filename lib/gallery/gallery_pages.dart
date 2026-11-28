@@ -15,7 +15,8 @@ extension _GalleryPages on _GalleryViewState {
   Widget _homeContent(GalleryReadState state, bool hasRead) {
     final live = _GalleryLiveScope.of(context);
     final card = c.current;
-    final nfcMessage = live?.app.nfcUnavailableMessage;
+    final noNfc = live?.app.nfcHardwareUnavailable == true;
+    final nfcMessage = noNfc ? '该手机不支持NFC识别' : live?.app.nfcUnavailableMessage;
     final readAction =
         nfcMessage != null ||
             live?.closing == true ||
@@ -54,6 +55,10 @@ extension _GalleryPages on _GalleryViewState {
                   failed: failed && nfcMessage == null,
                   compact: _compactHeight,
                   nfcMessage: nfcMessage,
+                  noNfc: noNfc,
+                  felicaSupported: live == null
+                      ? true
+                      : live.app.felicaReaderSupported,
                   failureMessage: live?.error,
                   progress: live?.readProgress,
                 )
@@ -123,7 +128,9 @@ extension _GalleryPages on _GalleryViewState {
                     card.saved ? '再次读取' : '保存卡片',
                     card.saved
                         ? readAction
-                        : () => c.showOverlay(GalleryOverlay.save),
+                        : live == null
+                        ? () => c.showOverlay(GalleryOverlay.save)
+                        : () => _requestLiveSave(live),
                     primary: true,
                     icon: card.saved
                         ? Icons.refresh_rounded
@@ -485,14 +492,33 @@ extension _GalleryPages on _GalleryViewState {
 
   Widget _trip(GalleryRecord trip, {bool interactive = true}) {
     final rail = trip['kind'] == 'rail';
+    final bus = trip['kind'] == 'bus';
+    final facility = trip['facility'] as TuTransitFacility?;
     final event = trip['kind'] == 'event';
     final oneWay = trip['oneWay'] == true;
     final boarding = trip['entryTime'] as String? ?? '未记录';
     final sub = (trip['sub'] as String? ?? '未记录 → 未记录').split(' → ');
-    final entry = trip['entryStation'] as String? ?? sub.first;
+    String stationFallback(String label) {
+      // Without a station, a projected bus transaction may reuse the
+      // presenter's balance subtitle. It's not a stop name.
+      if (bus &&
+          (label.startsWith('记录余额 ') ||
+              label.startsWith('交易后余额 ') ||
+              label.startsWith('余额 '))) {
+        return '未记录';
+      }
+      return label;
+    }
+
+    final entry =
+        facility?.nameLabel ??
+        trip['entryStation'] as String? ??
+        stationFallback(sub.first);
     final exit =
-        trip['exitStation'] as String? ?? (sub.length > 1 ? sub.last : '未记录');
+        trip['exitStation'] as String? ??
+        (sub.length > 1 ? stationFallback(sub.last) : '未记录');
     final entryLine =
+        facility?.routeNumber ??
         trip['entryLine'] as String? ??
         (rail
             ? (trip['title'] as String).replaceFirst('地铁 ', '')
@@ -606,7 +632,7 @@ extension _GalleryPages on _GalleryViewState {
                 _text('过程记录', role: GalleryTypography.caption, color: t.muted),
               ],
             )
-          : !rail && trip['kind'] != 'bus'
+          : !rail && !bus
           ? _transactionRow(trip)
           : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -642,7 +668,15 @@ extension _GalleryPages on _GalleryViewState {
                               size: 23,
                               fallbackIcon: rail
                                   ? Icons.train_outlined
-                                  : Icons.directions_bus_outlined,
+                                  : switch (facility) {
+                                      TuTransitFacility.yangtzeCableway =>
+                                        Icons.tram_outlined,
+                                      TuTransitFacility.kaixuanRoadElevator =>
+                                        Icons.elevator_outlined,
+                                      TuTransitFacility.crownEscalator =>
+                                        Icons.escalator_outlined,
+                                      null => Icons.directions_bus_outlined,
+                                    },
                               fallbackColor: rail
                                   ? t.text
                                   : t.onSecondaryContainer,
@@ -650,7 +684,7 @@ extension _GalleryPages on _GalleryViewState {
                           ),
                         ),
                         _text(
-                          rail ? '轨道交通' : '公交',
+                          facility?.modeLabel ?? (rail ? '轨道交通' : '公交'),
                           role: GalleryJourneyTypography.mode,
                         ),
                         if (city.isNotEmpty) ...[
@@ -668,10 +702,11 @@ extension _GalleryPages on _GalleryViewState {
                           _chip('异地用卡', weight: FontWeight.w400),
                       ],
                     ),
-                    _text(
-                      galleryDisplayAmount(trip['amount'] as String),
-                      role: GalleryJourneyTypography.amount,
-                    ),
+                    if (rail)
+                      _text(
+                        galleryDisplayAmount(trip['amount'] as String),
+                        role: GalleryJourneyTypography.amount,
+                      ),
                   ],
                 ),
                 _gap(12),
@@ -749,8 +784,12 @@ extension _GalleryPages on _GalleryViewState {
     return interactive
         ? Semantics(
             button: true,
-            label:
-                '${trip['title']}，${trip['sub']}，${galleryDisplayAmount(trip['amount'] as String)}',
+            label: facility != null
+                ? '${facility.modeLabel}，${facility.routeNumber}，${facility.nameLabel}，${_tripClock(boarding)}'
+                : bus
+                ? '${trip['title']}，$entry${oneWay ? '' : ' → $exit'}'
+                : '${trip['title']}，${trip['sub']}，'
+                      '${galleryDisplayAmount(trip['amount'] as String)}',
             child: InkWell(
               onTap: () => c.showOverlay(GalleryOverlay.trip, trip: trip),
               child: body,
@@ -988,7 +1027,8 @@ extension _GalleryPages on _GalleryViewState {
                           inserted: _walletArrivals.contains(card.id),
                           onFace: () =>
                               c.showOverlay(GalleryOverlay.face, card: card),
-                          onDelete: () => _deleteWalletCard(card),
+                          onDelete: () =>
+                              c.showOverlay(GalleryOverlay.delete, card: card),
                           child: DecoratedBox(
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(24),
@@ -1069,33 +1109,71 @@ extension _GalleryPages on _GalleryViewState {
     ),
   );
 
-  void _deleteWalletCard(GalleryCard card) {
+  Future<void> _confirmDeleteWalletCard(String cardId) async {
+    if (_confirmingCardDeletion ||
+        c.overlay != GalleryOverlay.delete ||
+        c.selectedCardId != cardId)
+      return;
+    final card = c.savedCards.where((card) => card.id == cardId).firstOrNull;
+    if (card == null) return;
+    final feedback = GalleryFeedbackHost.messengerOf(context);
     final live = _GalleryLiveScope.of(context);
-    if (live != null) {
-      final saved = live.savedCardFor(card.id);
-      if (saved == null) return;
-      unawaited(() async {
-        final deleted = await confirmDeleteArchiveCard(
-          context,
-          live.app,
-          saved,
+    if (live == null) {
+      final removal = c.deleteCard(card);
+      if (removal != null) {
+        feedback(
+          '已删除“${card.name}”',
+          actionLabel: '撤回',
+          prioritizeAction: true,
+          onAction: () => c.restoreCard(removal),
         );
-        if (deleted && mounted) {
-          c.overlay = null;
-          if (c.page == GalleryPage.detail) c.back();
-          _toast('已删除“${card.name}”', type: GalleryFeedbackType.info);
-        }
-      }());
+      }
       return;
     }
-    final removal = c.deleteCard(card);
-    if (removal == null || !mounted) return;
-    _toast(
-      '已删除“${card.name}”',
-      type: GalleryFeedbackType.info,
-      actionLabel: '撤销',
-      onAction: () => c.restoreCard(removal),
-    );
+    final controller = c;
+    final repository = live.app.cardRepository;
+    final detailRouteId = controller.navigationStack
+        .where(
+          (route) =>
+              route.kind == GalleryRouteKind.page &&
+              route.page == GalleryPage.detail,
+        )
+        .lastOrNull
+        ?.id;
+    _confirmingCardDeletion = true;
+    // The confirmation closes only after the user commits. The window-level
+    // feedback survives the overlay and the deleted detail route.
+    controller.back();
+    try {
+      final deletion = await repository.deleteCardWithUndo(cardId);
+      if (deletion == null) {
+        feedback('卡片不存在或已删除');
+        return;
+      }
+      if (!live._disposed &&
+          detailRouteId != null &&
+          controller.navigationStack.lastOrNull?.id == detailRouteId) {
+        controller.back();
+      }
+      feedback(
+        '已删除“${card.name}”',
+        actionLabel: '撤回',
+        prioritizeAction: true,
+        onAction: () async {
+          try {
+            if (!await repository.undoCardDeletion(deletion)) {
+              feedback('卡片已重新加入，未覆盖现有记录');
+            }
+          } catch (_) {
+            feedback('撤回失败', type: GalleryFeedbackType.error);
+          }
+        },
+      );
+    } catch (_) {
+      feedback('删除失败，请重试。', type: GalleryFeedbackType.error);
+    } finally {
+      _confirmingCardDeletion = false;
+    }
   }
 
   Widget _footprints() => _list([

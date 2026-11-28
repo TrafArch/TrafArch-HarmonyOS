@@ -439,6 +439,7 @@ extension _GalleryComponents on _GalleryViewState {
     String label,
     String? value, {
     double labelWidth = 112,
+    bool mono = false,
   }) => Container(
     constraints: const BoxConstraints(minHeight: 44),
     padding: const EdgeInsets.symmetric(vertical: 11),
@@ -458,6 +459,7 @@ extension _GalleryComponents on _GalleryViewState {
             value ?? '未知',
             role: GalleryTypography.field,
             align: TextAlign.right,
+            mono: mono,
           ),
         ),
       ],
@@ -748,7 +750,7 @@ extension _GalleryComponents on _GalleryViewState {
 
   Widget _face(GalleryCard card) {
     final foreground = _faceForeground(card);
-    final cardNumber = _formatFaceCardNumber(card.pan);
+    final cardNumber = _faceCardNumberText(card);
     final balance = _balancePresentation(card);
     final currencyLabel = _faceCurrencyLabel(balance.currencyLabel);
     final numberStyle = GalleryTypography.amount.copyWith(
@@ -1303,6 +1305,30 @@ class _GalleryTabbedListState extends State<_GalleryTabbedList> {
       children: widget.children,
     );
   }
+}
+
+String _faceCardNumberText(GalleryCard card) {
+  final numbers = card.applicationNumbers;
+  if (numbers.isEmpty) {
+    final number = _formatFaceCardNumber(card.pan);
+    final lingnanOnly =
+        card.applications.length == 1 && card.applications.single == 'lingnan';
+    if (lingnanOnly && number != '未提供' && number != '未知') {
+      return 'LNP $number';
+    }
+    return number;
+  }
+  return numbers.entries
+      .map((entry) {
+        final number = _formatFaceCardNumber(entry.value);
+        return switch (entry.key) {
+          'TU' => number,
+          final label when label.startsWith('岭南通') => 'LNP $number',
+          final label when numbers.length > 1 => '$label $number',
+          _ => number,
+        };
+      })
+      .join('\n');
 }
 
 String _formatFaceCardNumber(String value) {

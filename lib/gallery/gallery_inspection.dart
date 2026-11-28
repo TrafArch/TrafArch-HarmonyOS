@@ -266,7 +266,10 @@ extension _GalleryInspection on _GalleryViewState {
     return _knowledgePage(data);
   }
 
-  Widget _knowledgePage(GalleryRecord data, {bool live = false}) {
+  Widget _knowledgePage(
+    GalleryRecord data, {
+    Map<String, GalleryKnowledgeCity>? indexedCities,
+  }) {
     final name = data['name'] as String? ?? '参考数据';
     final rawRegions = data['regions'];
     final regions = rawRegions is List
@@ -274,85 +277,92 @@ extension _GalleryInspection on _GalleryViewState {
         : null;
     final stats = _knowledgeStats(regions);
     final cities = regions ?? const <GalleryRecord>[];
-    return _knowledgeHomeList([
-      _gap(2),
-      _tabs(
-        ['交通联合 TU', '城市一卡通 CU'],
-        c.knowledgeTab == 'tu' ? 0 : 1,
-        (i) => c.update(() => c.knowledgeTab = i == 0 ? 'tu' : 'cu'),
-        id: 'knowledge-tabs',
-      ),
-      _sectionTitle('数据概况'),
-      _panel(
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: _text(
-                    '$name参考数据',
-                    role: GalleryTypography.label,
-                    weight: FontWeight.w600,
-                    color: t.muted,
-                  ),
-                ),
-                _text('本地数据', role: GalleryTypography.caption, color: t.onTone),
-              ],
-            ),
-            _gap(14),
-            Row(
-              children: [
-                _knowledgeMetric('cities', stats.cities, '城市数量'),
-                _knowledgeMetric('lines', stats.lines, '线路数量'),
-                _knowledgeMetric('stations', stats.stations, '站点数量'),
-              ],
-            ),
-            _gap(10),
-            _text(
-              live
-                  ? '用于识别读卡结果中的城市、线路与站点。\n当前读取使用本机已校验的 TU／CU 发布包，两个体系独立统计。'
-                  : '用于识别读卡结果中的城市、线路与站点。\n数据快照 ${c.data.knowledge['captured']}，两个体系独立统计。',
-              role: GalleryTypography.caption,
-              color: t.muted,
-            ),
-          ],
+    return _knowledgeHomeList(
+      [
+        _gap(2),
+        _tabs(
+          ['交通联合 TU', '城市一卡通 CU'],
+          c.knowledgeTab == 'tu' ? 0 : 1,
+          (i) => c.update(() => c.knowledgeTab = i == 0 ? 'tu' : 'cu'),
+          id: 'knowledge-tabs',
         ),
-        color: t.tone,
-        border: false,
-        radius: 20,
-      ),
-      _gap(6),
-      _expand('knowledge:meta', '数据来源与版本', [
-        _kv('源文件', data['source'] as String?),
-        _kv('数据库版本', data['version']?.toString()),
-        _kv('数据包版本', data['formatVersion']?.toString()),
-        _kv('来源 SHA256', data['sha256'] as String?),
-        for (final pair in [
-          ('cities', '城市码表'),
-          ('cards', '机构指纹'),
-          ('terminals', '终端规则'),
-          ('routes', '线路规则'),
-          ('bus', '公交资料'),
-          ('prefixes', '前缀规则'),
-        ])
-          if (data[pair.$1] != null)
-            _kv(pair.$2, _groupNumber(data[pair.$1] as int)),
-      ], initiallyOpen: c.knowledgeMetadata),
-      _sectionTitle(
-        '城市列表',
-        trailing: regions == null ? '未知' : '${cities.length} 个城市',
-      ),
-      if (cities.isEmpty)
-        _empty(
-          '暂无城市数据',
-          '当前参考数据未收录该体系的城市与线路。',
-          icon: Icons.location_city_outlined,
-        )
-      else
-        ...cities.indexed.map((item) => _knowledgeCityCard(item.$1, item.$2)),
-      _gap(4),
-    ]);
+        _sectionTitle('数据概况'),
+        _panel(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: _text(
+                      '$name参考数据',
+                      role: GalleryTypography.label,
+                      weight: FontWeight.w600,
+                      color: t.muted,
+                    ),
+                  ),
+                  _text(
+                    '本地数据',
+                    role: GalleryTypography.caption,
+                    color: t.onTone,
+                  ),
+                ],
+              ),
+              _gap(14),
+              Row(
+                children: [
+                  _knowledgeMetric('cities', stats.cities, '城市数量'),
+                  _knowledgeMetric('lines', stats.lines, '线路数量'),
+                  _knowledgeMetric('stations', stats.stations, '站点数量'),
+                ],
+              ),
+              _gap(10),
+              _text(
+                indexedCities != null
+                    ? '用于识别读卡结果中的城市、线路与站点。\n当前读取使用本机已校验的 TU／CU 发布包，两个体系独立统计。'
+                    : '用于识别读卡结果中的城市、线路与站点。\n数据快照 ${c.data.knowledge['captured']}，两个体系独立统计。',
+                role: GalleryTypography.caption,
+                color: t.muted,
+              ),
+            ],
+          ),
+          color: t.tone,
+          border: false,
+          radius: 20,
+        ),
+        _gap(6),
+        _expand('knowledge:meta', '数据来源与版本', [
+          _kv('源文件', data['source'] as String?),
+          _kv('数据库版本', data['version']?.toString()),
+          _kv('数据包版本', data['formatVersion']?.toString()),
+          _kv('来源 SHA256', data['sha256'] as String?),
+          for (final pair in [
+            ('cities', '城市码表'),
+            ('cards', '机构指纹'),
+            ('terminals', '终端规则'),
+            ('routes', '线路规则'),
+            ('bus', '公交资料'),
+            ('prefixes', '前缀规则'),
+          ])
+            if (data[pair.$1] != null)
+              _kv(pair.$2, _groupNumber(data[pair.$1] as int)),
+        ], initiallyOpen: c.knowledgeMetadata),
+        _sectionTitle(
+          '城市列表',
+          trailing: regions == null ? '未知' : '${cities.length} 个城市',
+        ),
+        if (cities.isEmpty)
+          _empty(
+            '暂无城市数据',
+            '当前参考数据未收录该体系的城市与线路。',
+            icon: Icons.location_city_outlined,
+          )
+        else
+          for (final (index, region) in cities.indexed)
+            _knowledgeCityCard(index, region, indexedCities?[region['code']]),
+        _gap(4),
+      ],
+    );
   }
 
   Widget _knowledgeHomeList(List<Widget> children) {
@@ -491,7 +501,11 @@ extension _GalleryInspection on _GalleryViewState {
     );
   }
 
-  Widget _knowledgeCityCard(int index, GalleryRecord region) {
+  Widget _knowledgeCityCard(
+    int index,
+    GalleryRecord region,
+    GalleryKnowledgeCity? indexedCity,
+  ) {
     final system = c.knowledgeTab;
     final name = '${region['name'] ?? '未知城市'}';
     final code = '${region['code'] ?? '未知'}';
@@ -508,7 +522,9 @@ extension _GalleryInspection on _GalleryViewState {
       child: _panel(
         InkWell(
           onTap: () => c.openKnowledgeCity(
-            GalleryKnowledgeCityView.fromRegion(system, region),
+            indexedCity == null
+                ? GalleryKnowledgeCityView.fromRegion(system, region)
+                : GalleryKnowledgeCityView.fromCity(indexedCity),
           ),
           child: Padding(
             padding: const EdgeInsets.all(16),

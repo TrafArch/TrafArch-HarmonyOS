@@ -1,15 +1,66 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
+import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:transit_card_analyzer/gallery/gallery_rail_line_catalog.dart';
 
 void main() {
-  test('rail SVG manifest covers the supplied city artwork', () {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+    'updated rail SVG artwork keeps the original visible line badge heights',
+    () async {
+      final reference = await _paintedHeight('3910/3910_Line_4.svg');
+      expect(reference, closeTo(24, .2));
+      for (final city in ['2900', '3050']) {
+        for (final line in ['01', '11']) {
+          for (final suffix in ['', '_black']) {
+            final asset = '$city/${city}_Line_$line$suffix.svg';
+            expect(
+              await _paintedHeight(asset),
+              closeTo(reference, .4),
+              reason: asset,
+            );
+          }
+        }
+      }
+      final tianjinSvgs = Directory('assets/Line_Icon/1121')
+          .listSync()
+          .whereType<File>()
+          .where((file) => file.path.endsWith('.svg'));
+      for (final file in tianjinSvgs) {
+        final asset = '1121/${file.uri.pathSegments.last}';
+        expect(
+          await _paintedHeight(asset),
+          closeTo(reference, .4),
+          reason: asset,
+        );
+      }
+      expect(await _paintedHeight('3930/3930_Line1.svg'), closeTo(22.875, .25));
+      expect(await _paintedHeight('5810/5810_Line_1.svg'), closeTo(24, .2));
+    },
+  );
+
+  test('rail SVG manifest covers the supplied city artwork', () async {
     final manifest = jsonDecode(
       File('assets/Line_Icon/icons.json').readAsStringSync(),
     ) as Map<String, dynamic>;
-    expect(manifest.keys.toSet(), {'3910', '3930', '5810'});
+    expect(manifest.keys.toSet(), {
+      '1000',
+      '1121',
+      '2900',
+      '3050',
+      '3910',
+      '3930',
+      '5810',
+      '5840',
+    });
+    final assetManifest = await AssetManifest.loadFromAssetBundle(rootBundle);
+    final bundled = assetManifest.listAssets().toSet();
+    final catalog = await GalleryRailLineCatalog.load(rootBundle);
 
     final registered = <String>{};
     for (final city in manifest.entries) {
@@ -20,11 +71,31 @@ void main() {
         expect(config[1] as num, greaterThan(0), reason: entry.key);
         expect(config[2] as num, greaterThan(0), reason: entry.key);
         final path = 'assets/Line_Icon/${city.key}/$file';
-        expect(File(path).existsSync(), isTrue, reason: path);
-        final source = File(path).readAsStringSync();
-        expect(source, isNot(contains('<style')), reason: path);
-        expect(source, isNot(contains('class=')), reason: path);
-        registered.add('${city.key}/$file');
+        final darkPath = catalog.icon(city.key, entry.key)?.darkPath;
+        for (final asset in [path, ?darkPath]) {
+          expect(bundled, contains(asset));
+          expect(File(asset).existsSync(), isTrue, reason: asset);
+          final source = File(asset).readAsStringSync();
+          expect(source, isNot(contains('<style')), reason: asset);
+          expect(source, isNot(contains('class=')), reason: asset);
+          if (city.key == '2900') {
+            expect(source, isNot(contains('<text')), reason: asset);
+          }
+          final viewBox = RegExp(r'viewBox="([^"]+)"').firstMatch(source);
+          expect(viewBox, isNotNull, reason: asset);
+          final dimensions = viewBox!
+              .group(1)!
+              .trim()
+              .split(RegExp(r'\s+'))
+              .map(double.parse)
+              .toList(growable: false);
+          expect(dimensions, hasLength(4), reason: asset);
+          expect(dimensions[2], greaterThan(0), reason: asset);
+          expect(dimensions[3], greaterThan(0), reason: asset);
+          expect(config[1] as num, closeTo(dimensions[2], .001), reason: asset);
+          expect(config[2] as num, closeTo(dimensions[3], .001), reason: asset);
+          registered.add(asset.replaceFirst('assets/Line_Icon/', ''));
+        }
       }
     }
 
@@ -36,10 +107,13 @@ void main() {
         .map((path) => path.replaceFirst('assets/Line_Icon/', ''))
         .toSet();
     expect(registered, supplied);
-    expect(registered, hasLength(30));
+    expect(registered, hasLength(149));
     expect(
       registered,
       containsAll([
+        '1000/1000_Line_01.svg',
+        '1000/1000_Line_0A_5A.svg',
+        '1000/Northeast_Loop_Line.svg',
         '3910/3910_Line_4.svg',
         '3910/3910_Line_F1.svg',
         '3930/3930_Line6.svg',
@@ -55,6 +129,82 @@ void main() {
       File('assets/Line_Icon/3910/3910_Line_F1.svg').readAsStringSync(),
       contains('fill="#00ADB9"'),
     );
+    expect(catalog.tuCode('1121', '天津市', 'tu'), '1121');
+    for (final (label, suffix) in [
+      for (var number = 1; number <= 11; number++)
+        ('$number号线', number.toString().padLeft(2, '0')),
+      ('津静线', '21'),
+      ('津靜線', '21'),
+      ('Z4线', 'Z4'),
+      ('z4', 'Z4'),
+      ('Z4線', 'Z4'),
+    ]) {
+      final line = catalog.lineKey('1121', label);
+      expect(
+        catalog.icon('1121', line)?.path,
+        'assets/Line_Icon/1121/1121_Line_$suffix.svg',
+        reason: label,
+      );
+    }
+    expect(catalog.tuCode('3050', '苏州市', 'tu'), '3050');
+    for (final (code, lineNumbers) in [
+      ('2900', List<int>.generate(18, (index) => index + 1)),
+      ('3050', [1, 2, 3, 4, 5, 6, 7, 8, 11]),
+    ]) {
+      for (final number in lineNumbers) {
+        final suffix = number.toString().padLeft(2, '0');
+        final stem = 'assets/Line_Icon/$code/${code}_Line_$suffix';
+        final icon = catalog.icon(code, '$number号线');
+        expect(icon?.path, '$stem.svg');
+        expect(icon?.darkPath, '${stem}_black.svg');
+      }
+    }
+  });
+
+  test('Guangdong intercity line names resolve to the supplied SVGs', () async {
+    final catalog = await GalleryRailLineCatalog.load(rootBundle);
+    const files = {
+      '广清城际': '70',
+      '广州东环城际': '71_75_76',
+      '广肇城际': '72',
+      '广惠城际': '73',
+      '琶莲城际': '74',
+      '新白广城际': '77_78',
+      '穗深城际': '77_78',
+    };
+    for (final entry in files.entries) {
+      final line = catalog.lineKey('5810', entry.key);
+      expect(
+        catalog.icon('5810', line)?.path,
+        'assets/Line_Icon/5810/5810_Line_${entry.value}.svg',
+        reason: entry.key,
+      );
+    }
+    for (final suffix in files.values.toSet()) {
+      final asset = '5810/5810_Line_$suffix.svg';
+      expect(await _paintedHeight(asset), closeTo(24, .2), reason: asset);
+    }
+  });
+
+  test('Shenzhen line names resolve to the supplied SVGs', () async {
+    final catalog = await GalleryRailLineCatalog.load(rootBundle);
+    const code = '5840';
+    expect(catalog.tuCode('5180', '深圳市', 'CU'), code);
+    for (final (number, suffix) in [
+      (1, '68'),
+      (2, '60'),
+      (3, '61'),
+      (5, '63'),
+      (7, '65'),
+      (8, '66'),
+      (9, '67'),
+      (11, '41'),
+    ]) {
+      final line = '$number号线';
+      final asset = '$code/${code}_Line_$suffix.svg';
+      expect(catalog.icon(code, line)?.path, 'assets/Line_Icon/$asset');
+      expect(await _paintedHeight(asset), closeTo(24, .25), reason: asset);
+    }
   });
 
   test('offline palette keeps verified mappings and its upstream license', () {
@@ -104,11 +254,29 @@ void main() {
     expect(catalog.tuCode('2000', '上海', 'cu'), '2900');
     expect(catalog.tuCode('5180', '深圳', 'cu'), '5840');
     expect(catalog.lineKey('3910', 'F1'), '滨海快线');
+    expect(catalog.lineKey('1000', '怀柔-密云线'), '怀密线');
     expect(
       catalog.icon('3910', '滨海快线')?.path,
       'assets/Line_Icon/3910/3910_Line_F1.svg',
     );
+    expect(
+      catalog.icon('1000', '18号线')?.path,
+      'assets/Line_Icon/1000/1000_Line_12.svg',
+    );
+    for (final (name, suffix) in [
+      ('浦江线', 'PJ'),
+      ('磁浮线', '90'),
+      ('机场联络线', '51'),
+      ('市域机场线', '51'),
+    ]) {
+      final line = catalog.lineKey('2900', name);
+      expect(
+        catalog.icon('2900', line)?.path,
+        'assets/Line_Icon/2900/2900_Line_$suffix.svg',
+      );
+    }
     expect(catalog.paletteColor('2900', '4号线')?.toARGB32(), 0xff461d84);
+    expect(catalog.paletteColor('2900', '机场联络线')?.toARGB32(), 0xff236890);
     expect(catalog.paletteColor('5840', '4号线')?.toARGB32(), 0xffda291c);
     expect(catalog.paletteColor('5840', '8号线')?.toARGB32(), 0xffb94700);
     expect(catalog.paletteColor('5840', '8号线（原）')?.toARGB32(), 0xffe45dbf);
@@ -124,4 +292,44 @@ void main() {
       contains('https://github.com/railmapgen/rmg-palette'),
     );
   });
+}
+
+Future<double> _paintedHeight(String path) async {
+  final info = await vg.loadPicture(
+    SvgAssetLoader('assets/Line_Icon/$path'),
+    null,
+  );
+  const samplesPerDp = 8.0;
+  const sampleHeight = 192;
+  final scale = sampleHeight / info.size.height;
+  final recorder = ui.PictureRecorder();
+  (ui.Canvas(recorder)..scale(scale)).drawPicture(info.picture);
+  final picture = recorder.endRecording();
+  ui.Image? image;
+  try {
+    image = await picture.toImage(
+      (info.size.width * scale).ceil(),
+      sampleHeight,
+    );
+    final pixels = (await image.toByteData(
+      format: ui.ImageByteFormat.rawRgba,
+    ))!;
+    int? firstRow;
+    var lastRow = -1;
+    for (var y = 0; y < image.height; y++) {
+      for (var x = 0; x < image.width; x++) {
+        final alpha = pixels.getUint8((y * image.width + x) * 4 + 3);
+        if (alpha >= 128) {
+          firstRow ??= y;
+          lastRow = y;
+          break;
+        }
+      }
+    }
+    return firstRow == null ? 0 : (lastRow - firstRow + 1) / samplesPerDp;
+  } finally {
+    image?.dispose();
+    picture.dispose();
+    info.picture.dispose();
+  }
 }

@@ -1,3 +1,16 @@
 {
-  "string": [{ "name": "app_name", "value": "TrafArch" }]
+  "string": [
+    {
+      "name": "app_name",
+      "value": "TrafArch"
+    },
+    {
+      "name": "harmonyos_dev_assistant",
+      "value": "0.2.4"
+    },
+    {
+      "name": "harmonyos_dev_assistant_feature",
+      "value": "harmonyos-multi-device"
+    }
+  ]
 }

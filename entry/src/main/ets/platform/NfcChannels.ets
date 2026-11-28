@@ -127,10 +127,24 @@ export class NfcChannels implements StreamHandler {
     this.statusSink?.success(status);
   }
 
+  private getFelicaReaderSupport(): boolean | null {
+    try {
+      if (!canIUse('SystemCapability.Communication.NFC.Tag') || !nfcController.isNfcSupported()) {
+        return false;
+      }
+    } catch (_) {}
+    // The controller reports NFC availability without listing supported tag technologies.
+    return null;
+  }
+
   private bind(channel: MethodChannel, felicaOnly: boolean): void {
     channel.setMethodCallHandler({
       onMethodCall: (call: MethodCall, result: MethodResult): void => {
         const method = call.method;
+        if (method === 'getFelicaReaderSupport' && !felicaOnly) {
+          result.success(this.getFelicaReaderSupport());
+          return;
+        }
         const exchange = method === 'transceive' || method === 'transceiveFelica';
         if (method !== 'scanOnce' && method !== 'stopScan' &&
           (!exchange || (felicaOnly && method === 'transceive'))) {

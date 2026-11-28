@@ -333,6 +333,15 @@ class _GalleryKnowledgeResultTile extends StatelessWidget {
     const shape = RoundedRectangleBorder(
       borderRadius: BorderRadius.all(Radius.circular(14)),
     );
+    final title = Text(
+      result.title,
+      style: GalleryTypography.body.copyWith(
+        fontWeight: FontWeight.w600,
+        fontFamily: result.kind == GalleryKnowledgeKind.code
+            ? 'monospace'
+            : null,
+      ),
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Material(
@@ -340,15 +349,19 @@ class _GalleryKnowledgeResultTile extends StatelessWidget {
         shape: shape.copyWith(side: BorderSide(color: colors.line)),
         child: ListTile(
           shape: shape,
-          title: Text(
-            result.title,
-            style: GalleryTypography.body.copyWith(
-              fontWeight: FontWeight.w600,
-              fontFamily: result.kind == GalleryKnowledgeKind.code
-                  ? 'monospace'
-                  : null,
-            ),
-          ),
+          title: result.kind == GalleryKnowledgeKind.line
+              ? Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  heightFactor: 1,
+                  child: _GalleryRailLineBadge(
+                    line: result.title,
+                    cityCode: city.code,
+                    cityName: city.name,
+                    citySystem: city.system,
+                    labelFallback: title,
+                  ),
+                )
+              : title,
           subtitle: Text(
             '${result.kind.label} · ${city.system}\n$note',
             style: GalleryTypography.caption.copyWith(color: colors.muted),
@@ -472,7 +485,11 @@ extension _GalleryKnowledgeDetails on _GalleryViewState {
     final stationTarget = c.knowledgeCityStation;
     final codeTarget = c.knowledgeCityCode;
     // 编码可能挂在线路上而不属于某个站点：此时高亮线路卡并展示原值。
-    final lineCodeMatch = codeTarget != null && line.codes.contains(codeTarget);
+    final lineCodeMatch =
+        target &&
+        stationTarget == null &&
+        codeTarget != null &&
+        line.codes.contains(codeTarget);
     final stationsKnown = city.hasStationData;
     final card = Material(
       color: t.surface,
@@ -506,16 +523,22 @@ extension _GalleryKnowledgeDetails on _GalleryViewState {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _text(
-                            line.name,
-                            role: GalleryTypography.body,
-                            weight: FontWeight.w600,
+                          _GalleryRailLineBadge(
+                            line: line.name,
+                            cityCode: city.code,
+                            cityName: city.name,
+                            citySystem: city.system,
+                            labelFallback: _text(
+                              line.name,
+                              role: GalleryTypography.body,
+                              weight: FontWeight.w600,
+                            ),
                           ),
                           _gap(2),
                           _text(
                             line.codes.isEmpty
                                 ? '线路编号未知'
-                                : line.codes.join('、'),
+                                : '线路编码 ${line.codes.join('、')}',
                             role: GalleryTypography.caption,
                             color: t.muted,
                             mono: line.codes.isNotEmpty,
@@ -569,11 +592,7 @@ extension _GalleryKnowledgeDetails on _GalleryViewState {
                       index,
                       stationIndex,
                       station,
-                      highlighted:
-                          (stationTarget != null &&
-                              station.name == stationTarget) ||
-                          (codeTarget != null &&
-                              station.codes.contains(codeTarget)),
+                      highlighted: target && station.name == stationTarget,
                     ),
               ],
             ),
@@ -660,29 +679,27 @@ extension _GalleryKnowledgeDetails on _GalleryViewState {
     // 吸顶搜索头盖住视口顶部，定位目标要多让出它的收合高度。
     final clearance = _KnowledgeSearchHeaderGeometry.of(context).compactHeight;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      for (var attempt = 0; attempt < 32; attempt++) {
-        if (!mounted ||
-            c.page != GalleryPage.knowledgeCity ||
-            c.knowledgeCityReveal != token) {
-          return;
-        }
+      var firstFrame = true;
+      while (mounted &&
+          c.page == GalleryPage.knowledgeCity &&
+          c.knowledgeCityReveal == token &&
+          _knowledgeScroll.hasClients) {
         final target = _knowledgeRevealKey?.currentContext;
         if (target != null && target.mounted) {
           await _revealKnowledgeTarget(target, clearance, duration);
           return;
         }
-        if (!_knowledgeScroll.hasClients) {
-          await WidgetsBinding.instance.endOfFrame;
-          continue;
-        }
         final position = _knowledgeScroll.position;
-        if (position.pixels >= position.maxScrollExtent - .5) return;
-        _knowledgeScroll.jumpTo(
-          math.min(
-            position.maxScrollExtent,
-            position.pixels + position.viewportDimension * .75,
-          ),
-        );
+        // 返回城市时可能恢复到目标之后。未构建目标时从顶部开始，逐屏走到列表末尾。
+        final next = firstFrame && position.pixels > position.minScrollExtent
+            ? position.minScrollExtent
+            : math.min(
+                position.maxScrollExtent,
+                position.pixels + position.viewportDimension * .75,
+              );
+        if ((next - position.pixels).abs() < .5) return;
+        firstFrame = false;
+        _knowledgeScroll.jumpTo(next);
         await WidgetsBinding.instance.endOfFrame;
       }
     });

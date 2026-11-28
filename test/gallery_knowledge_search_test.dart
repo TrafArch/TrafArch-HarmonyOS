@@ -46,6 +46,68 @@ void main() {
     expect(index.search('00100018')[GalleryKnowledgeKind.code], isNull);
   });
 
+  test('line codes resolve to their own line with original spelling', () {
+    for (final (system, city, line, code) in [
+      ('TU', '2900', '10号线', '29000010'),
+      ('TU', '2900', '10号线', '0010'),
+      ('TU', '3910', '1号线', '01'),
+      ('TU', '3030', '6号线', '0006'),
+      ('TU', '1000', '昌平线', '5E'),
+      ('TU', '2900', '朱泾7', '1657'),
+      ('TU', '5810', '广清城际', '0070'),
+      ('TU', '5810', '广州东环城际', '0071'),
+      ('TU', '5810', '广肇城际', '0072'),
+      ('TU', '5810', '广惠城际', '0073'),
+      ('TU', '5810', '琶莲城际', '0074'),
+      ('TU', '5810', '广州东环城际', '0075'),
+      ('TU', '5810', '广州东环城际', '0076'),
+      ('TU', '5810', '新白广城际', '0077'),
+      ('TU', '5810', '穗深城际', '0078'),
+      ('TU', '6110', '1号线', '611000000001'),
+      ('CU', '2000', '10号线', '1110'),
+      ('CU', '2150', '1号线', '03000003'),
+      ('CU', '2500', '4号线', '04'),
+      ('CU', '2500', '4号线', '00000000000004'),
+      ('CU', '5180', '1号线', '518068'),
+      ('CU', '5180', '2号线', '518060'),
+      ('CU', '5180', '3号线', '518061'),
+      ('CU', '5180', '5号线', '518063'),
+      ('CU', '5180', '7号线', '518065'),
+      ('CU', '5180', '8号线', '518066'),
+      ('CU', '5180', '9号线', '518067'),
+      ('CU', '5180', '11号线', '518041'),
+    ]) {
+      final hits = index.search(code)[GalleryKnowledgeKind.code] ?? [];
+      expect(
+        hits.where(
+          (hit) =>
+              hit.code == code &&
+              hit.city.system == system &&
+              hit.city.code == city &&
+              hit.line?.name == line &&
+              hit.station == null &&
+              hit.line!.codes.contains(code),
+        ),
+        hasLength(1),
+        reason: '$system $city $line $code',
+      );
+    }
+  });
+
+  test('station and terminal keys stay separate from line codes', () {
+    GalleryKnowledgeLine line(String system, String cityCode, String name) =>
+        index.cities
+            .singleWhere(
+              (city) => city.system == system && city.code == cityCode,
+            )
+            .lines
+            .singleWhere((line) => line.name == name);
+    expect(line('TU', '2900', '10号线').codes, isNot(contains('290000100018')));
+    expect(line('TU', '1610', '2').codes, isEmpty);
+    expect(line('CU', '2000', '浦江线').codes, isNot(contains('1108')));
+    expect(line('CU', '2000', '8号线').codes, contains('1108'));
+  });
+
   test('default loader validates the bundled packages and builds the index off-isolate', () async {
     const paths = MethodChannel('plugins.flutter.io/path_provider');
     final messenger =
@@ -231,17 +293,27 @@ void main() {
       await tester.drag(results, const Offset(0, -420));
       await tester.pumpAndSettle();
       final saved = scroll.offset;
+      expect(saved, greaterThan(0));
       final visible = find
           .descendant(of: results, matching: find.byType(ListTile))
           .hitTestable();
       // 线路结果定位到城市详情页，并预先展开目标线路（US-008）。
-      final lineResult = tester.widget<ListTile>(visible.first);
-      final lineTitle = (lineResult.title! as Text).data!;
+      final lineTitle = tester
+          .getSemantics(visible.first)
+          .label
+          .split('\n')
+          .first;
       await tester.tap(visible.first);
       await tester.pumpAndSettle();
       expect(controller.page, GalleryPage.knowledgeCity);
       expect(controller.knowledgeCityLine, lineTitle);
-      expect(find.text(lineTitle), findsWidgets);
+      final city = controller.selectedKnowledgeCity!;
+      expect(
+        controller.knowledgeExpanded,
+        contains(
+          GalleryKnowledgeLineView.idFor(city.system, city.code, lineTitle),
+        ),
+      );
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       expect(controller.page, GalleryPage.knowledgeSearch);
@@ -321,16 +393,18 @@ void main() {
       final fromCityView = controller.selectedKnowledgeCity!;
       expect(fromCityView.system, 'TU');
       expect(fromCityView.lineCount, 25);
-      // 搜索索引来自发布包全量线路（26 条，含「未标注线路」），与声明值
-      // 不同，恰好说明两个入口都按统一口径取声明值。
-      expect(fromCityView.lines, hasLength(26));
+      // 发布包另有公交线路和只有前缀、尚无站点的线路，样例概况仍取声明值。
+      expect(
+        fromCityView.lines.map((line) => line.name),
+        containsAll(['朱泾7', '19号线']),
+      );
       expect(find.text('25'), findsOneWidget);
       expect(find.text('收录 25 条线路'), findsOneWidget);
 
       final city = index.cities.firstWhere(
         (city) => city.system == 'TU' && city.name == '上海',
       );
-      expect(city.lines, hasLength(26));
+      expect(fromCityView.lines.length, city.lines.length);
       expect(GalleryKnowledgeCityView.fromCity(city).lineCount, 25);
       final root = jsonDecode(
         File('assets/gallery/fixtures.json').readAsStringSync(),
